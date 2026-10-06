@@ -36,3 +36,7 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
     operationsSorter: method
+
+# Permite a Spring reconocer HTTPS detrás de Nginx/Cloudflare/Traefik
+server:
+  forward-headers-strategy: framework
