@@ -8,14 +8,13 @@ services:
     container_name: running-api
     restart: always
     ports:
-      - "8080:8080"
+      # Mapea ${APP_PORT} del host al puerto interno 8080 de Spring Boot
+      - "${APP_PORT:-8080}:8080"
     environment:
       - SPRING_DATASOURCE_URL=jdbc:sqlite:/app/data/activities.db?busy_timeout=30000&journal_mode=WAL
       - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.community.dialect.SQLiteDialect
     volumes:
-      # Persistencia de la base de datos SQLite fuera del contenedor
       - running_api_data:/app/data
-      # Persistencia de la carpeta de almacenamiento de archivos
       - running_api_storage:/app/storage
 
 volumes:
