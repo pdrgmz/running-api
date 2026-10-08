@@ -42,33 +42,12 @@ public class ActivityService {
     @Transactional
     public List<Activity> getAllActivities() {
         List<Activity> list = activityRepository.findAll();
-        boolean globalStatsNeedUpdate = false;
-        for (Activity activity : list) {
-            List<ActivityTrackpoint> points = trackpointRepository.findByActivityIdOrderByTimestampAsc(activity.getId());
-            boolean modified = analyticsService.populateMetrics(activity, points);
-            if (modified) {
-                activityRepository.save(activity);
-                globalStatsNeedUpdate = true;
-            }
-        }
-        if (globalStatsNeedUpdate) {
-            recalculateGlobalSummaryStats();
-        }
         return list;
     }
 
     @Transactional
     public Optional<Activity> getActivityById(String id) {
         Optional<Activity> activityOpt = activityRepository.findById(id);
-        if (activityOpt.isPresent()) {
-            Activity activity = activityOpt.get();
-            List<ActivityTrackpoint> points = trackpointRepository.findByActivityIdOrderByTimestampAsc(activity.getId());
-            boolean modified = analyticsService.populateMetrics(activity, points);
-            if (modified) {
-                activityRepository.save(activity);
-                recalculateGlobalSummaryStats();
-            }
-        }
         return activityOpt;
     }
 
