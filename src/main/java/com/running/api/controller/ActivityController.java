@@ -5,12 +5,13 @@ import com.running.api.model.ActivityTrackpoint;
 import com.running.api.service.ActivityService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -24,9 +25,10 @@ public class ActivityController {
     private final ActivityService activityService;
 
     @GetMapping
-    @Operation(summary = "Listar todas las carreras registradas")
-    public ResponseEntity<List<Activity>> getAllActivities() {
-        return ResponseEntity.ok(activityService.getAllActivities());
+    @Operation(summary = "Listar todas las carreras registradas (paginado y ordenado)")
+    public ResponseEntity<Page<Activity>> getAllActivities(
+            @PageableDefault(page = 0, size = 20, sort = "startTime", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(activityService.getAllActivities(pageable));
     }
 
     @GetMapping("/{id}")
@@ -38,9 +40,11 @@ public class ActivityController {
     }
 
     @GetMapping("/{id}/trackpoints")
-    @Operation(summary = "Obtener los trackpoints de una carrera por ID")
-    public ResponseEntity<List<ActivityTrackpoint>> getActivityTrackpointsById(@PathVariable String id) {
-        List<ActivityTrackpoint> trackpoints = activityService.getActivityTrackpointsById(id);
+    @Operation(summary = "Obtener los trackpoints de una carrera por ID", description = "Soporta muestreo opcional mediante ?resolution=low|medium|high.")
+    public ResponseEntity<List<ActivityTrackpoint>> getActivityTrackpointsById(
+            @PathVariable String id,
+            @RequestParam(required = false) String resolution) {
+        List<ActivityTrackpoint> trackpoints = activityService.getActivityTrackpointsById(id, resolution);
         if (trackpoints.isEmpty()) {
             return ResponseEntity.notFound().build();
         }

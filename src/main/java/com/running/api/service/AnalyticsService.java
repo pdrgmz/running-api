@@ -1,5 +1,6 @@
 package com.running.api.service;
 
+import com.running.api.dto.*;
 import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
@@ -20,12 +21,12 @@ public class AnalyticsService {
     private Integer defaultMaxHr;
 
     // 1. Splits por Kilómetro
-    public List<Map<String, Object>> calculateSplits(String activityId) {
+    public List<SplitDto> calculateSplits(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
         List<ActivityTrackpoint> points = activity.getTrackpoints();
-        List<Map<String, Object>> splits = new ArrayList<>();
+        List<SplitDto> splits = new ArrayList<>();
 
         if (points.isEmpty()) return splits;
 
@@ -37,7 +38,7 @@ public class AnalyticsService {
             ActivityTrackpoint pt = points.get(i);
 
             if (pt.getDistanceMeters() != null && pt.getDistanceMeters() >= targetMeters) {
-                splits.add(buildSplitMap(currentKm, points.subList(startIndex, i + 1)));
+                splits.add(buildSplitDto(currentKm, points.subList(startIndex, i + 1)));
                 currentKm++;
                 targetMeters += 1000.0;
                 startIndex = i;
@@ -45,14 +46,13 @@ public class AnalyticsService {
         }
 
         if (startIndex < points.size() - 1) {
-            splits.add(buildSplitMap(currentKm, points.subList(startIndex, points.size())));
+            splits.add(buildSplitDto(currentKm, points.subList(startIndex, points.size())));
         }
 
         return splits;
     }
 
-    private Map<String, Object> buildSplitMap(int km, List<ActivityTrackpoint> segment) {
-        
+    private SplitDto buildSplitDto(int km, List<ActivityTrackpoint> segment) {
         double startDist = segment.get(0).getDistanceMeters();
         double endDist = segment.get(segment.size() - 1).getDistanceMeters();
         double distMeters = endDist - startDist;
@@ -73,17 +73,17 @@ public class AnalyticsService {
             }
         }
 
-        return Map.of(
-                "km", km,
-                "distanceMeters", Math.round(distMeters * 100.0) / 100.0,
-                "timeSeconds", timeSeconds,
-                "paceMinPerKm", String.format("%.2f", paceMinPerKm),
-                "avgHeartRate", countHr > 0 ? (sumHr / countHr) : 0
-        );
+        return SplitDto.builder()
+                .km(km)
+                .distanceMeters(Math.round(distMeters * 100.0) / 100.0)
+                .timeSeconds(timeSeconds)
+                .paceMinPerKm(String.format("%.2f", paceMinPerKm))
+                .avgHeartRate(countHr > 0 ? (sumHr / countHr) : 0)
+                .build();
     }
 
     // 2. Zonas de Frecuencia Cardíaca (Z1 a Z5)
-    public Map<String, Object> calculateHrZones(String activityId) {
+    public HrZonesResponseDto calculateHrZones(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
@@ -104,26 +104,30 @@ public class AnalyticsService {
 
         int total = z1 + z2 + z3 + z4 + z5;
 
-        return Map.of(
-                "maxHrUsed", maxHr,
-                "zones", Map.of(
-                        "Z1_Recovery", Map.of("seconds", z1, "percentage", total > 0 ? Math.round((z1 * 100.0 / total) * 10.0) / 10.0 : 0),
-                        "Z2_Endurance", Map.of("seconds", z2, "percentage", total > 0 ? Math.round((z2 * 100.0 / total) * 10.0) / 10.0 : 0),
-                        "Z3_Tempo", Map.of("seconds", z3, "percentage", total > 0 ? Math.round((z3 * 100.0 / total) * 10.0) / 10.0 : 0),
-                        "Z4_Threshold", Map.of("seconds", z4, "percentage", total > 0 ? Math.round((z4 * 100.0 / total) * 10.0) / 10.0 : 0),
-                        "Z5_Anaerobic", Map.of("seconds", z5, "percentage", total > 0 ? Math.round((z5 * 100.0 / total) * 10.0) / 10.0 : 0)
-                )
-        );
+        HrZonesMapDto map = HrZonesMapDto.builder()
+                .z1Recovery(new HrZoneDetailDto(z1, total > 0 ? Math.round((z1 * 100.0 / total) * 10.0) / 10.0 : 0.0))
+                .z2Endurance(new HrZoneDetailDto(z2, total > 0 ? Math.round((z2 * 100.0 / total) * 10.0) / 10.0 : 0.0))
+                .z3Tempo(new HrZoneDetailDto(z3, total > 0 ? Math.round((z3 * 100.0 / total) * 10.0) / 10.0 : 0.0))
+                .z4Threshold(new HrZoneDetailDto(z4, total > 0 ? Math.round((z4 * 100.0 / total) * 10.0) / 10.0 : 0.0))
+                .z5Anaerobic(new HrZoneDetailDto(z5, total > 0 ? Math.round((z5 * 100.0 / total) * 10.0) / 10.0 : 0.0))
+                .build();
+
+        return HrZonesResponseDto.builder()
+                .maxHrUsed(maxHr)
+                .zones(map)
+                .build();
     }
 
     // 3. Cardiac Drift (Desacople Aeróbico) con guardas contra división por cero
-    public Map<String, Object> calculateCardiacDrift(String activityId) {
+    public CardiacDriftResponseDto calculateCardiacDrift(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
         List<ActivityTrackpoint> points = activity.getTrackpoints();
         if (points.size() < 10) {
-            return Map.of("status", "Insuficientes puntos de telemetría para calcular desacople aeróbico");
+            return CardiacDriftResponseDto.builder()
+                    .status("Insuficientes puntos de telemetría para calcular desacople aeróbico")
+                    .build();
         }
 
         int half = points.size() / 2;
@@ -131,17 +135,19 @@ public class AnalyticsService {
         double ratio2 = calculateHalfRatio(points.subList(half, points.size()));
 
         if (ratio1 <= 0.0) {
-            return Map.of("status", "Datos de pulso/velocidad no válidos en la primera mitad");
+            return CardiacDriftResponseDto.builder()
+                    .status("Datos de pulso/velocidad no válidos en la primera mitad")
+                    .build();
         }
 
         double driftPct = ((ratio2 - ratio1) / ratio1) * 100.0;
 
-        return Map.of(
-                "firstHalfEfficiencyRatio", Math.round(ratio1 * 1000.0) / 1000.0,
-                "secondHalfEfficiencyRatio", Math.round(ratio2 * 1000.0) / 1000.0,
-                "cardiacDriftPercentage", String.format("%.2f", driftPct),
-                "decouplingStatus", driftPct > 5.0 ? "Desacople significativo (Fatiga/Deshidratación)" : "Esfuerzo aeróbico estable"
-        );
+        return CardiacDriftResponseDto.builder()
+                .firstHalfEfficiencyRatio(Math.round(ratio1 * 1000.0) / 1000.0)
+                .secondHalfEfficiencyRatio(Math.round(ratio2 * 1000.0) / 1000.0)
+                .cardiacDriftPercentage(String.format("%.2f", driftPct))
+                .decouplingStatus(driftPct > 5.0 ? "Desacople significativo (Fatiga/Deshidratación)" : "Esfuerzo aeróbico estable")
+                .build();
     }
 
     private double calculateHalfRatio(List<ActivityTrackpoint> segment) {
@@ -163,13 +169,13 @@ public class AnalyticsService {
     }
 
     // 4. Carga de Entrenamiento (TRIMP / HRSS)
-    public Map<String, Object> calculateTrainingLoad(String activityId) {
+    public TrainingLoadResponseDto calculateTrainingLoad(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
         return computeTrainingLoadDetails(activity);
     }
 
-    public Map<String, Object> computeTrainingLoadDetails(Activity activity) {
+    public TrainingLoadResponseDto computeTrainingLoadDetails(Activity activity) {
         List<ActivityTrackpoint> trackpoints = activity.getTrackpoints();
         int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
         int restHr = 60;
@@ -225,24 +231,24 @@ public class AnalyticsService {
         else if (primaryTrainingLoad < 300) effortLevel = "Muy Intenso";
         else effortLevel = "Extremo / Agotador";
 
-        return Map.of(
-                "activityId", activity.getId() != null ? activity.getId() : "",
-                "trainingLoad", primaryTrainingLoad,
-                "edwardsTrimp", Math.round(edwardsTrimp * 10.0) / 10.0,
-                "banisterTrimp", roundedBanister,
-                "hrss", hrss,
-                "effortLevel", effortLevel
-        );
+        return TrainingLoadResponseDto.builder()
+                .activityId(activity.getId() != null ? activity.getId() : "")
+                .trainingLoad(primaryTrainingLoad)
+                .edwardsTrimp(Math.round(edwardsTrimp * 10.0) / 10.0)
+                .banisterTrimp(roundedBanister)
+                .hrss(hrss)
+                .effortLevel(effortLevel)
+                .build();
     }
 
     // 5. Estimación VO2Max y VAM (Velocidad Aeróbica Máxima)
-    public Map<String, Object> calculateVo2MaxAndVam(String activityId) {
+    public Vo2MaxVamResponseDto calculateVo2MaxAndVam(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
         return computeVo2MaxAndVamDetails(activity);
     }
 
-    public Map<String, Object> computeVo2MaxAndVamDetails(Activity activity) {
+    public Vo2MaxVamResponseDto computeVo2MaxAndVamDetails(Activity activity) {
         List<ActivityTrackpoint> trackpoints = activity.getTrackpoints();
         int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
         int restHr = 60;
@@ -302,20 +308,20 @@ public class AnalyticsService {
         else if (finalVo2Max < 60.0) fitnessCategory = "Avanzado / Excelente";
         else fitnessCategory = "Elite / Atleta de Alto Rendimiento";
 
-        Map<String, String> racePredictions = Map.of(
-                "5k", formatPredictionTime(5000.0 / (vamKmH * 0.95 / 3.6)),
-                "10k", formatPredictionTime(10000.0 / (vamKmH * 0.90 / 3.6)),
-                "21k", formatPredictionTime(21097.5 / (vamKmH * 0.85 / 3.6)),
-                "42k", formatPredictionTime(42195.0 / (vamKmH * 0.80 / 3.6))
-        );
+        RacePredictionsDto predictions = RacePredictionsDto.builder()
+                .k5(formatPredictionTime(5000.0 / (vamKmH * 0.95 / 3.6)))
+                .k10(formatPredictionTime(10000.0 / (vamKmH * 0.90 / 3.6)))
+                .k21(formatPredictionTime(21097.5 / (vamKmH * 0.85 / 3.6)))
+                .k42(formatPredictionTime(42195.0 / (vamKmH * 0.80 / 3.6)))
+                .build();
 
-        return Map.of(
-                "activityId", activity.getId() != null ? activity.getId() : "",
-                "vo2MaxEstimated", finalVo2Max,
-                "vamKmH", vamKmH,
-                "fitnessCategory", fitnessCategory,
-                "predictedRaceTimes", racePredictions
-        );
+        return Vo2MaxVamResponseDto.builder()
+                .activityId(activity.getId() != null ? activity.getId() : "")
+                .vo2MaxEstimated(finalVo2Max)
+                .vamKmH(vamKmH)
+                .fitnessCategory(fitnessCategory)
+                .predictedRaceTimes(predictions)
+                .build();
     }
 
     private String formatPredictionTime(double seconds) {
@@ -375,16 +381,16 @@ public class AnalyticsService {
         }
 
         if (activity.getTrainingLoad() == null) {
-            Map<String, Object> tlDetails = computeTrainingLoadDetails(activity);
-            Double tl = (Double) tlDetails.get("trainingLoad");
+            TrainingLoadResponseDto tlDetails = computeTrainingLoadDetails(activity);
+            Double tl = tlDetails.getTrainingLoad();
             activity.setTrainingLoad(tl);
             modified = true;
         }
 
         if (activity.getVo2MaxEstimated() == null || activity.getVamKmH() == null) {
-            Map<String, Object> vo2Details = computeVo2MaxAndVamDetails(activity);
-            Double vo2 = (Double) vo2Details.get("vo2MaxEstimated");
-            Double vam = (Double) vo2Details.get("vamKmH");
+            Vo2MaxVamResponseDto vo2Details = computeVo2MaxAndVamDetails(activity);
+            Double vo2 = vo2Details.getVo2MaxEstimated();
+            Double vam = vo2Details.getVamKmH();
             activity.setVo2MaxEstimated(vo2);
             activity.setVamKmH(vam);
             modified = true;

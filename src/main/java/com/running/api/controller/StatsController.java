@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -22,9 +23,11 @@ public class StatsController {
     private final StatsService statsService;
 
     @GetMapping("/summary")
-    @Operation(summary = "Obtener resumen global acumulado", description = "Distancia total, tiempo total, desnivel acumulado y promedios.")
-    public ResponseEntity<SummaryStatsDto> getSummary() {
-        return ResponseEntity.ok(statsService.getGlobalSummary());
+    @Operation(summary = "Obtener resumen acumulado o filtrado por rango temporal", description = "Filtro opcional mediante period (THIS_MONTH, THIS_YEAR, 2026) o year (2026).")
+    public ResponseEntity<SummaryStatsDto> getSummary(
+            @RequestParam(required = false) String period,
+            @RequestParam(required = false) Integer year) {
+        return ResponseEntity.ok(statsService.getSummary(period, year));
     }
 
     @GetMapping("/records")

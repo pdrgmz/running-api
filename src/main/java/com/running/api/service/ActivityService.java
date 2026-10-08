@@ -11,6 +11,8 @@ import com.running.api.model.GlobalSummaryStats;
 
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -39,16 +41,19 @@ public class ActivityService {
     private final AnalyticsService analyticsService;
     private final StatsService statsService;
 
-    @Transactional
+    @Transactional(readOnly = true)
     public List<Activity> getAllActivities() {
-        List<Activity> list = activityRepository.findAll();
-        return list;
+        return activityRepository.findAll();
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
+    public Page<Activity> getAllActivities(Pageable pageable) {
+        return activityRepository.findAll(pageable);
+    }
+
+    @Transactional(readOnly = true)
     public Optional<Activity> getActivityById(String id) {
-        Optional<Activity> activityOpt = activityRepository.findById(id);
-        return activityOpt;
+        return activityRepository.findById(id);
     }
 
     private void recalculateGlobalSummaryStats() {
@@ -61,7 +66,47 @@ public class ActivityService {
     }
 
     public List<ActivityTrackpoint> getActivityTrackpointsById(String id) {
-        return trackpointRepository.findByActivityIdOrderByTimestampAsc(id);
+        return getActivityTrackpointsById(id, null);
+    }
+
+    public List<ActivityTrackpoint> getActivityTrackpointsById(String id, String resolution) {
+        List<ActivityTrackpoint> points = trackpointRepository.findByActivityIdOrderByTimestampAsc(id);
+        if (points.isEmpty() || resolution == null || resolution.trim().isEmpty()) {
+            return points;
+        }
+        return downsampleTrackpoints(points, resolution);
+    }
+
+    private List<ActivityTrackpoint> downsampleTrackpoints(List<ActivityTrackpoint> points, String resolution) {
+        int step;
+        switch (resolution.trim().toLowerCase()) {
+            case "low":
+                step = 10;
+                break;
+            case "medium":
+                step = 5;
+                break;
+            case "high":
+                step = 2;
+                break;
+            default:
+                return points;
+        }
+
+        if (points.size() <= step) {
+            return points;
+        }
+
+        List<ActivityTrackpoint> sampled = new ArrayList<>();
+        for (int i = 0; i < points.size(); i += step) {
+            sampled.add(points.get(i));
+        }
+
+        ActivityTrackpoint lastPoint = points.get(points.size() - 1);
+        if (!sampled.isEmpty() && sampled.get(sampled.size() - 1) != lastPoint) {
+            sampled.add(lastPoint);
+        }
+        return sampled;
     }
 
     @Transactional

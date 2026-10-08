@@ -7,6 +7,7 @@ import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.running.api.model.GlobalSummaryStats;
@@ -14,13 +15,13 @@ import com.running.api.model.PersonalRecord;
 import com.running.api.repository.GlobalSummaryStatsRepository;
 import com.running.api.repository.PersonalRecordRepository;
 
-
-
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.*;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class StatsService {
 
     private final ActivityRepository activityRepository;
@@ -39,9 +40,26 @@ public class StatsService {
 
     @Transactional(readOnly = true)
     public SummaryStatsDto getGlobalSummary() {
-        
-        GlobalSummaryStats stats = summaryStatsRepository.findById(1L)
-                .orElseGet(this::calculateAndSaveInitialStats);
+        return getSummary(null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public SummaryStatsDto getSummary(String period, Integer year) {
+        LocalDateTime[] range = resolveDateRange(period, year);
+        GlobalSummaryStats stats;
+
+        if (range != null) {
+            stats = activityRepository.calculateAggregatedSummaryBetween(range[0], range[1]);
+            log.info("Estadísticas calculadas para el rango: {} - {}", range[0], range[1]);
+            log.info("Estadísticas: {}", stats);
+            
+            if (stats == null) {
+                stats = GlobalSummaryStats.builder().id(1L).build();
+            }
+        } else {
+            stats = summaryStatsRepository.findById(1L)
+                    .orElseGet(this::calculateAndSaveInitialStats);
+        }
 
         long totalActivities = stats.getTotalActivities();
         double totalDistance = stats.getTotalDistanceMeters();
@@ -67,11 +85,100 @@ public class StatsService {
                 .build();
     }
 
-   @Transactional
+    private LocalDateTime[] resolveDateRange(String period, Integer year) {
+        LocalDateTime[] range = calculateDateRange(period, year);
+        if (range != null) {
+            log.info("Rango temporal resuelto para period='{}', year={}: desde {} hasta {}", period, year, range[0], range[1]);
+        } else {
+            log.info("Sin filtro de rango temporal para period='{}', year={}", period, year);
+        }
+        return range;
+    }
+
+    private LocalDateTime[] calculateDateRange(String period, Integer year) {
+    if (period != null && !period.trim().isEmpty()) {
+        String p = period.trim().toUpperCase();
+
+        if (p.matches("^\\d{4}$")) {
+            int y = Integer.parseInt(p);
+            return createYearRange(y);
+        }
+
+        if (p.matches("^\\d{4}-\\d{2}$")) {
+            java.time.YearMonth ym = java.time.YearMonth.parse(p);
+            return new LocalDateTime[]{
+                    ym.atDay(1).atStartOfDay(),
+                    ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
+            };
+        }
+
+        if ("THIS_MONTH".equals(p)) {
+            java.time.YearMonth ym = java.time.YearMonth.now();
+            return new LocalDateTime[]{
+                    ym.atDay(1).atStartOfDay(),
+                    ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
+            };
+        }
+
+        if ("LAST_MONTH".equals(p)) {
+            java.time.YearMonth ym = java.time.YearMonth.now().minusMonths(1);
+            return new LocalDateTime[]{
+                    ym.atDay(1).atStartOfDay(),
+                    ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
+            };
+        }
+
+        if ("THIS_YEAR".equals(p)) {
+            int y = LocalDateTime.now().getYear();
+            return createYearRange(y);
+        }
+
+        if ("LAST_YEAR".equals(p)) {
+            int y = LocalDateTime.now().getYear() - 1;
+            return createYearRange(y);
+        }
+
+        if ("THIS_WEEK".equals(p)) {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            java.time.LocalDate monday = today.with(java.time.DayOfWeek.MONDAY);
+            java.time.LocalDate sunday = today.with(java.time.DayOfWeek.SUNDAY);
+
+            return new LocalDateTime[]{
+                    monday.atStartOfDay(),
+                    sunday.atTime(23, 59, 59, 999_000_000)
+            };
+        }
+
+        if ("LAST_WEEK".equals(p)) {
+            java.time.LocalDate lastWeekDay = java.time.LocalDate.now().minusWeeks(1);
+            java.time.LocalDate monday = lastWeekDay.with(java.time.DayOfWeek.MONDAY);
+            java.time.LocalDate sunday = lastWeekDay.with(java.time.DayOfWeek.SUNDAY);
+
+            return new LocalDateTime[]{
+                    monday.atStartOfDay(),
+                    sunday.atTime(23, 59, 59, 999_000_000)
+            };
+        }
+    }
+
+    if (year != null) {
+        return createYearRange(year);
+    }
+
+    return null;
+}
+
+    private LocalDateTime[] createYearRange(int year) {
+        return new LocalDateTime[]{
+                LocalDateTime.of(year, 1, 1, 0, 0, 0),
+                LocalDateTime.of(year, 12, 31, 23, 59, 59, 999999999)
+        };
+    }
+
+    @Transactional
     public List<RecordResponseDto> getPersonalRecords() {
         List<PersonalRecord> records = personalRecordRepository.findAll();
 
-        // Si aún no existen récords procesados, los calculamos desde las actividades existentes
         if (records.isEmpty()) {
             records = recalculateAllPersonalRecords();
         }
@@ -118,14 +225,9 @@ public class StatsService {
         return minTimeSec;
     }
     
-    /**
-     * Calcula las estadísticas globales directamente desde la tabla de actividades mediante SQL
-     * y las guarda en la tabla 'global_summary_stats' para futuras lecturas rápidas O(1).
-     */
     private GlobalSummaryStats calculateAndSaveInitialStats() {
         GlobalSummaryStats initialStats = activityRepository.calculateAggregatedSummary();
         
-        // Si la tabla de actividades estaba completamente vacía, nos aseguramos de que no sea null
         if (initialStats == null) {
             initialStats = GlobalSummaryStats.builder().id(1L).build();
         }
@@ -144,7 +246,6 @@ public class StatsService {
             String category = entry.getKey();
             Double targetMeters = entry.getValue();
 
-            // Si la actividad ni siquiera alcanza la distancia objetivo, la omitimos
             if (activity.getDistanceMeters() < targetMeters) continue;
 
             Double bestTimeForActivity = findFastestSegment(points, targetMeters);
@@ -152,7 +253,6 @@ public class StatsService {
 
             Optional<PersonalRecord> existingRecordOpt = personalRecordRepository.findByDistanceCategory(category);
 
-            // Si no existe récord para esta categoría O si el nuevo tiempo es mejor, actualizamos/creamos
             if (existingRecordOpt.isEmpty() || bestTimeForActivity < existingRecordOpt.get().getBestTimeSeconds()) {
                 double avgSpeed = targetMeters / bestTimeForActivity;
                 double pace = (1000.0 / (avgSpeed * 60.0));
@@ -173,10 +273,6 @@ public class StatsService {
         }
     }
 
-    /**
-     * Recorre las actividades existentes para encontrar y guardar los mejores récords iniciales.
-     * Se ejecuta una sola vez si la tabla 'personal_records' está vacía.
-     */
     public List<PersonalRecord> recalculateAllPersonalRecords() {
         List<PersonalRecord> calculatedRecords = new ArrayList<>();
 
@@ -184,13 +280,11 @@ public class StatsService {
             String category = entry.getKey();
             Double targetMeters = entry.getValue();
 
-            // 1. Traemos únicamente las actividades que igualan o superan la distancia objetivo
             List<Activity> eligibleActivities = activityRepository.findByDistanceMetersGreaterThanEqual(targetMeters);
 
             PersonalRecord bestRecordForCategory = null;
 
             for (Activity activity : eligibleActivities) {
-                // 2. Traemos los trackpoints ordenados por tiempo
                 List<ActivityTrackpoint> points = trackpointRepository.findByActivityIdOrderByTimestampAsc(activity.getId());
                 if (points == null || points.isEmpty()) continue;
 
@@ -218,7 +312,6 @@ public class StatsService {
             }
         }
 
-        // Guarda todos los récords encontrados en la base de datos
         if (!calculatedRecords.isEmpty()) {
             personalRecordRepository.saveAll(calculatedRecords);
         }
@@ -239,4 +332,3 @@ public class StatsService {
         recalculateAllPersonalRecords();
     }
 }
-

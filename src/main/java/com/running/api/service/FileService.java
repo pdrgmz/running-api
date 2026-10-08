@@ -1,6 +1,7 @@
 package com.running.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.running.api.dto.BulkFileUploadResponseDto;
 import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
 import com.running.api.repository.ActivityRepository;
@@ -13,7 +14,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -87,7 +87,7 @@ public class FileService {
         return createActivity(activity);
     }
     
-    public Map<String, Object> saveBulkTcxFiles(MultipartFile file) {
+    public BulkFileUploadResponseDto saveBulkTcxFiles(MultipartFile file) {
 
         int successCount = 0;
         int errorCount = 0;
@@ -97,11 +97,13 @@ public class FileService {
         String filename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "";
 
         if (filename.toLowerCase().endsWith(".zip")) {
-            Map<String, Object> zipResult = processZipFile(file);
-            successCount += (int) zipResult.get("successCount");
-            errorCount += (int) zipResult.get("errorCount");
-            totalProcessed += (int) zipResult.get("totalProcessed");
-            errors.addAll((List<String>) zipResult.get("errors"));
+            BulkFileUploadResponseDto zipResult = processZipFile(file);
+            successCount += zipResult.getSuccessCount();
+            errorCount += zipResult.getErrorCount();
+            totalProcessed += zipResult.getTotalFiles();
+            if (zipResult.getErrors() != null) {
+                errors.addAll(zipResult.getErrors());
+            }
         } else {
             totalProcessed++;
             try {
@@ -113,15 +115,15 @@ public class FileService {
             }
         }        
 
-        return Map.of(
-                "totalFiles", totalProcessed,
-                "successCount", successCount,
-                "errorCount", errorCount,
-                "errors", errors
-        );
+        return BulkFileUploadResponseDto.builder()
+                .totalFiles(totalProcessed)
+                .successCount(successCount)
+                .errorCount(errorCount)
+                .errors(errors)
+                .build();
     }
 
-    private Map<String, Object> processZipFile(MultipartFile file) {
+    private BulkFileUploadResponseDto processZipFile(MultipartFile file) {
         int successCount = 0;
         int errorCount = 0;
         int totalProcessed = 0;
@@ -150,12 +152,12 @@ public class FileService {
             errors.add("Error al descomprimir el archivo ZIP " + file.getOriginalFilename() + ": " + e.getMessage());
         }
 
-        return Map.of(
-                "totalProcessed", totalProcessed,
-                "successCount", successCount,
-                "errorCount", errorCount,
-                "errors", errors
-        );
+        return BulkFileUploadResponseDto.builder()
+                .totalFiles(totalProcessed)
+                .successCount(successCount)
+                .errorCount(errorCount)
+                .errors(errors)
+                .build();
     }
 
     public void exportBulkJsonZip(List<String> ids, HttpServletResponse response) throws Exception {
