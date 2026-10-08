@@ -1,5 +1,6 @@
 server:
   port: 8080
+  forward-headers-strategy: framework
 
 spring:
   datasource:
@@ -37,6 +38,3 @@ springdoc:
     path: /swagger-ui.html
     operationsSorter: method
 
-# Permite a Spring reconocer HTTPS detrás de Nginx/Cloudflare/Traefik
-server:
-  forward-headers-strategy: framework

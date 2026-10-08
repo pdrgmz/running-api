@@ -13,7 +13,7 @@ services:
     environment:
       - SPRING_DATASOURCE_URL=jdbc:sqlite:/app/data/activities.db?busy_timeout=30000&journal_mode=WAL
       - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.community.dialect.SQLiteDialect
-      - APP_CORS_ALLOWED_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - APP_CORS_ALLOWED_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173,https://running-api.pdrgmz.uk,http://running-api.pdrgmz.uk}
     volumes:
       - running_api_data:/app/data
       - running_api_storage:/app/storage

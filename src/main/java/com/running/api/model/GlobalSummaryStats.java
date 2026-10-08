@@ -22,6 +22,7 @@ import lombok.ToString;
 public class GlobalSummaryStats {
 
     @Id
+    @Builder.Default
     private Long id = 1L;
 
     @Column(name = "total_activities", nullable = false)
