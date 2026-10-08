@@ -47,5 +47,26 @@ public class ActivityController {
         return ResponseEntity.ok(trackpoints);
     }
 
-    
+    @DeleteMapping
+    @Operation(summary = "Vaciar toda la base de datos", description = "Elimina todas las carreras, trackpoints, récords personales y reinicia las estadísticas globales.")
+    public ResponseEntity<Map<String, Object>> deleteAllActivities() {
+        int count = activityService.deleteAllActivities();
+        return ResponseEntity.ok(Map.of(
+                "message", "Base de datos y estadísticas vaciadas con éxito",
+                "deletedActivities", count
+        ));
+    }
+
+    @DeleteMapping("/{id}")
+    @Operation(summary = "Eliminar una carrera por ID")
+    public ResponseEntity<Map<String, Object>> deleteActivityById(@PathVariable String id) {
+        boolean deleted = activityService.deleteActivityById(id);
+        if (!deleted) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(Map.of(
+                "message", "Carrera eliminada con éxito",
+                "activityId", id
+        ));
+    }
 }

@@ -29,7 +29,7 @@ app:
   user:
     max-hr: 185 # Pulsaciones máximas por defecto para zonas FC
   elevation:
-    min-threshold-meters: 0.8 # Umbral de histeresis para filtrar ruido GPS en elevación
+    min-threshold-meters: 0.1 # Umbral de histeresis para filtrar ruido GPS en elevación
 
 springdoc:
   api-docs:

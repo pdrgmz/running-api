@@ -46,5 +46,20 @@ public class BackupStorageService {
     public Path getRootLocation() {
         return rootLocation;
     }
+
+    public void clearStorage() {
+        try {
+            if (Files.exists(rootLocation)) {
+                try (var stream = Files.walk(rootLocation)) {
+                    stream.filter(Files::isRegularFile)
+                          .forEach(path -> {
+                              try {
+                                  Files.deleteIfExists(path);
+                              } catch (IOException ignored) {}
+                          });
+                }
+            }
+        } catch (Exception ignored) {}
+    }
 }
 

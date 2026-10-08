@@ -35,4 +35,16 @@ public class AnalyticsController {
     public ResponseEntity<Map<String, Object>> getCardiacDrift(@PathVariable String id) {
         return ResponseEntity.ok(analyticsService.calculateCardiacDrift(id));
     }
+
+    @GetMapping("/{id}/training-load")
+    @Operation(summary = "Carga de entrenamiento de la sesión (TRIMP / HRSS / Esfuerzo)")
+    public ResponseEntity<Map<String, Object>> getTrainingLoad(@PathVariable String id) {
+        return ResponseEntity.ok(analyticsService.calculateTrainingLoad(id));
+    }
+
+    @GetMapping("/{id}/vo2max-vam")
+    @Operation(summary = "Estimación del consumo de oxígeno (VO2Max) y Velocidad Aeróbica Máxima (VAM)")
+    public ResponseEntity<Map<String, Object>> getVo2MaxAndVam(@PathVariable String id) {
+        return ResponseEntity.ok(analyticsService.calculateVo2MaxAndVam(id));
+    }
 }

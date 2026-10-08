@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -13,9 +14,11 @@ import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 
 @Service
+@RequiredArgsConstructor
 public class TcxParserService {
 
     private final XmlMapper xmlMapper = new XmlMapper();
+    private final AnalyticsService analyticsService;
 
     @Value("${app.elevation.min-threshold-meters:0.8}")
     private double elevationThreshold;
@@ -38,6 +41,9 @@ public class TcxParserService {
     int maxHr = 0;
     long sumHr = 0;
     int countHr = 0;
+    int maxCadence = 0;
+    long sumCadence = 0;
+    int countCadence = 0;
     double calculatedMaxSpeed = 0.0;
 
     Activity activity = Activity.builder()
@@ -103,12 +109,13 @@ public class TcxParserService {
                 }
             }
 
-            // 3. Métrica de Elevación con Umbral
-            double alt = tp.path("AltitudeMeters").asDouble(-999.0);
+            // 3. Métrica de Elevación (Desnivel acumulado)
+            double alt = extractAltitude(tp);
+
             if (alt != -999.0) {
                 if (prevAlt != -999.0) {
                     double diff = alt - prevAlt;
-                    if (Math.abs(diff) >= elevationThreshold) {
+                    if (Math.abs(diff) > 0.01) { // Filtro anti-ruido fino (1 cm)
                         if (diff > 0) elevationGain += diff;
                         else elevationLoss += Math.abs(diff);
                         prevAlt = alt;
@@ -126,6 +133,12 @@ public class TcxParserService {
                 if (hr > maxHr) maxHr = hr;
                 sumHr += hr;
                 countHr++;
+            }
+
+            if (cadence > 0) {
+                if (cadence > maxCadence) maxCadence = cadence;
+                sumCadence += cadence;
+                countCadence++;
             }
 
             // 5. Velocidad (Extensión ns3:TPX o cálculo por delta)
@@ -166,9 +179,15 @@ public class TcxParserService {
     activity.setMaxSpeed(calculatedMaxSpeed > 0 ? calculatedMaxSpeed : activity.getAvgSpeed());
     activity.setMaxHeartRate(maxHr > 0 ? maxHr : null);
     activity.setAvgHeartRate(countHr > 0 ? (int) (sumHr / countHr) : null);
+    activity.setAvgCadence(countCadence > 0 ? (int) Math.round((double) sumCadence / countCadence) : null);
+    activity.setMaxCadence(maxCadence > 0 ? maxCadence : null);
     activity.setTotalCalories(totalCalories);
     activity.setElevationGain(elevationGain);
     activity.setElevationLoss(elevationLoss);
+
+    if (analyticsService != null) {
+        analyticsService.populateMetrics(activity);
+    }
 
     return activity;
 }
@@ -203,5 +222,22 @@ private double calculateHaversineDistance(double lat1, double lon1, double lat2,
     double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return EARTH_RADIUS_METERS * c;
+}
+
+private double extractAltitude(JsonNode tp) {
+    JsonNode node = tp.path("AltitudeMeters");
+    if (node.isMissingNode()) node = tp.path("Position").path("AltitudeMeters");
+    if (node.isMissingNode()) node = tp.path("Altitude");
+    if (node.isMissingNode()) node = tp.path("ele");
+
+    if (!node.isMissingNode() && !node.isNull()) {
+        String txt = node.asText();
+        if (!txt.isEmpty()) {
+            try {
+                return Double.parseDouble(txt);
+            } catch (NumberFormatException ignored) {}
+        }
+    }
+    return -999.0;
 }
 }

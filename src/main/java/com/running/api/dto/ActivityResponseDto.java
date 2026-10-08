@@ -20,8 +20,15 @@ public class ActivityResponseDto {
     private Double avgSpeed;
     private Double maxSpeed;
     private String avgPaceFormatted;
+    private Double avgPaceMinPerKm;
+    private Double maxPaceMinPerKm;
     private Integer avgHeartRate;
     private Integer maxHeartRate;
+    private Integer avgCadence;
+    private Integer maxCadence;
+    private Double trainingLoad;
+    private Double vo2MaxEstimated;
+    private Double vamKmH;
     private Integer totalCalories;
     private Double elevationGain;
     private Double elevationLoss;

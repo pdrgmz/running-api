@@ -47,6 +47,27 @@ public class Activity {
     @Schema(description = "Frecuencia cardíaca máxima (bpm)")
     private Integer maxHeartRate;
 
+    @Schema(description = "Cadencia media en pasos por minuto (spm)")
+    private Integer avgCadence;
+
+    @Schema(description = "Cadencia máxima en pasos por minuto (spm)")
+    private Integer maxCadence;
+
+    @Schema(description = "Paso/Pace promedio en min/km (ej. 4.50 = 4:30 min/km)")
+    private Double avgPaceMinPerKm;
+
+    @Schema(description = "Paso/Pace máximo/más rápido alcanzado en min/km")
+    private Double maxPaceMinPerKm;
+
+    @Schema(description = "Carga de esfuerzo de entrenamiento de la sesión (TRIMP / HRSS)")
+    private Double trainingLoad;
+
+    @Schema(description = "Estimación del consumo máximo de oxígeno (VO2Max) en mL/kg/min")
+    private Double vo2MaxEstimated;
+
+    @Schema(description = "Estimación de la Velocidad Aeróbica Máxima (VAM) en km/h")
+    private Double vamKmH;
+
     private Integer totalCalories;
 
     @Schema(description = "Desnivel positivo acumulado (D+) en metros")

@@ -40,11 +40,10 @@ public class FileService {
 
    
     public Activity createActivity(Activity activity) {
-        Activity saved = activityRepository.save(activity);        
+        Activity saved = activityRepository.save(activity);       
         
         updateStatsOnCreate(saved);
         statsService.checkAndSetPersonalRecords(saved);       
-        System.out.println("Activity created: " + saved.getId());
         return saved;
     }
 

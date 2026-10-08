@@ -225,5 +225,18 @@ public class StatsService {
 
         return calculatedRecords;
     }
+
+    @Transactional
+    public void recalculateStatsAndRecords() {
+        summaryStatsRepository.deleteAll();
+        GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary();
+        if (newStats == null) {
+            newStats = GlobalSummaryStats.builder().id(1L).build();
+        }
+        summaryStatsRepository.save(newStats);
+
+        personalRecordRepository.deleteAll();
+        recalculateAllPersonalRecords();
+    }
 }
 
