@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Schema(description = "Respuesta de la importación de un archivo TCX individual")
+@Schema(description = "Respuesta de la importación de un archivo individual")
 public class FileUploadResponseDto {
 
     @Schema(description = "Mensaje informativo del estado de la subida", example = "Carrera importada y respaldada con éxito")

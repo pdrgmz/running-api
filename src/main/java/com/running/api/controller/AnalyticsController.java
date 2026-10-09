@@ -1,43 +1,26 @@
 package com.running.api.controller;
 
-import com.running.api.dto.*;
+import com.running.api.dto.AcwrStatusDto;
+import com.running.api.dto.CardiacDriftResponseDto;
+import com.running.api.dto.EddingtonStatsDto;
+import com.running.api.dto.HrZonesResponseDto;
+import com.running.api.dto.PmcPointDto;
+import com.running.api.dto.SplitDto;
+import com.running.api.dto.TrainingLoadResponseDto;
+import com.running.api.dto.Vo2MaxVamResponseDto;
 import com.running.api.service.AnalyticsService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-
-import java.time.LocalDate;
-import org.springframework.format.annotation.DateTimeFormat;
-
-// Import de los DTOs si están en el paquete dto
-import com.running.api.dto.PmcPointDto;
-import com.running.api.dto.EddingtonStatsDto;
-import com.running.api.dto.StreakStatsDto;
-import com.running.api.dto.WeekdayStatsDto;
-
-import com.running.api.dto.DaytimeStatsDto;
-import com.running.api.dto.EddingtonStatsDto;
-import com.running.api.dto.PmcPointDto;
-import com.running.api.dto.StreakStatsDto;
-import com.running.api.dto.WeekdayStatsDto;
-import com.running.api.service.AnalyticsService;
-
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.tags.Tag;
-
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
-import java.util.List;
-
 import java.util.List;
 
 @RestController

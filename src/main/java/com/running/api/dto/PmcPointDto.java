@@ -1,6 +1,7 @@
 package com.running.api.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.time.LocalDate;
 
 @Schema(description = "Punto diario de la curva PMC (Fitness, Fatiga, Forma y ACWR)")

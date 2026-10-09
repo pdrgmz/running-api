@@ -2,17 +2,16 @@ package com.running.api.repository;
 
 import com.running.api.model.Activity;
 import com.running.api.model.GlobalSummaryStats;
+import com.running.api.repository.projection.DailyTrimpProjection;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
-
-import com.running.api.repository.projection.DailyTrimpProjection;
 
 @Repository
 public interface ActivityRepository extends JpaRepository<Activity, String> {
@@ -44,7 +43,6 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
 
     List<Activity> findByDistanceMetersGreaterThanEqual(Double distanceMeters);
 
-
     @Query("""
         SELECT 
             CAST(a.startTime AS java.time.LocalDate) AS date, 
@@ -59,9 +57,6 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
         @Param("endDate") LocalDate endDate
     );
 
-    /**
-     * Agrupa y calcula la distancia total en km redondeada por día en orden descendente para Eddington.
-     */
     @Query("""
         SELECT 
             CAST(FLOOR(SUM(a.distanceMeters) / 1000.0) AS int) 
@@ -72,5 +67,5 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
     List<Integer> findDailyDistancesKmDescending();
 
     @Query("SELECT MIN(CAST(a.startTime AS java.time.LocalDate)) FROM Activity a")
-       Optional<LocalDate> findEarliestActivityDate();
+    Optional<LocalDate> findEarliestActivityDate();
 }

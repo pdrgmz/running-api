@@ -1,6 +1,7 @@
 package com.running.api.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.time.DayOfWeek;
 
 @Schema(description = "Agregación de métricas de rendimiento por día de la semana")

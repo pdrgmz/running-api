@@ -29,6 +29,7 @@ public class ActivityService {
     private final PersonalRecordRepository personalRecordRepository;
     private final BackupStorageService backupStorageService;
     private final FileService fileService;
+    private final StatsService statsService;
 
     @Transactional(readOnly = true)
     public Page<Activity> getAllActivities(Pageable pageable) {

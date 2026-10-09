@@ -4,16 +4,16 @@ import com.running.api.dto.RecordResponseDto;
 import com.running.api.dto.SummaryStatsDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
+import com.running.api.model.GlobalSummaryStats;
+import com.running.api.model.PersonalRecord;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
+import com.running.api.repository.GlobalSummaryStatsRepository;
+import com.running.api.repository.PersonalRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import com.running.api.model.GlobalSummaryStats;
-import com.running.api.model.PersonalRecord;
-import com.running.api.repository.GlobalSummaryStatsRepository;
-import com.running.api.repository.PersonalRecordRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -51,7 +51,7 @@ public class StatsService {
             stats = activityRepository.calculateAggregatedSummaryBetween(range[0], range[1]);
             log.info("Estadísticas calculadas para el rango: {} - {}", range[0], range[1]);
             log.info("Estadísticas: {}", stats);
-            
+
             if (stats == null) {
                 stats = GlobalSummaryStats.builder().id(1L).build();
             }
@@ -95,77 +95,77 @@ public class StatsService {
     }
 
     private LocalDateTime[] calculateDateRange(String period, Integer year) {
-    if (period != null && !period.trim().isEmpty()) {
-        String p = period.trim().toUpperCase();
+        if (period != null && !period.trim().isEmpty()) {
+            String p = period.trim().toUpperCase();
 
-        if (p.matches("^\\d{4}$")) {
-            int y = Integer.parseInt(p);
-            return createYearRange(y);
+            if (p.matches("^\\d{4}$")) {
+                int y = Integer.parseInt(p);
+                return createYearRange(y);
+            }
+
+            if (p.matches("^\\d{4}-\\d{2}$")) {
+                java.time.YearMonth ym = java.time.YearMonth.parse(p);
+                return new LocalDateTime[]{
+                        ym.atDay(1).atStartOfDay(),
+                        ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
+                };
+            }
+
+            if ("THIS_MONTH".equals(p)) {
+                java.time.YearMonth ym = java.time.YearMonth.now();
+                return new LocalDateTime[]{
+                        ym.atDay(1).atStartOfDay(),
+                        ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
+                };
+            }
+
+            if ("LAST_MONTH".equals(p)) {
+                java.time.YearMonth ym = java.time.YearMonth.now().minusMonths(1);
+                return new LocalDateTime[]{
+                        ym.atDay(1).atStartOfDay(),
+                        ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
+                };
+            }
+
+            if ("THIS_YEAR".equals(p)) {
+                int y = LocalDateTime.now().getYear();
+                return createYearRange(y);
+            }
+
+            if ("LAST_YEAR".equals(p)) {
+                int y = LocalDateTime.now().getYear() - 1;
+                return createYearRange(y);
+            }
+
+            if ("THIS_WEEK".equals(p)) {
+                java.time.LocalDate today = java.time.LocalDate.now();
+                java.time.LocalDate monday = today.with(java.time.DayOfWeek.MONDAY);
+                java.time.LocalDate sunday = today.with(java.time.DayOfWeek.SUNDAY);
+
+                return new LocalDateTime[]{
+                        monday.atStartOfDay(),
+                        sunday.atTime(23, 59, 59, 999_000_000)
+                };
+            }
+
+            if ("LAST_WEEK".equals(p)) {
+                java.time.LocalDate lastWeekDay = java.time.LocalDate.now().minusWeeks(1);
+                java.time.LocalDate monday = lastWeekDay.with(java.time.DayOfWeek.MONDAY);
+                java.time.LocalDate sunday = lastWeekDay.with(java.time.DayOfWeek.SUNDAY);
+
+                return new LocalDateTime[]{
+                        monday.atStartOfDay(),
+                        sunday.atTime(23, 59, 59, 999_000_000)
+                };
+            }
         }
 
-        if (p.matches("^\\d{4}-\\d{2}$")) {
-            java.time.YearMonth ym = java.time.YearMonth.parse(p);
-            return new LocalDateTime[]{
-                    ym.atDay(1).atStartOfDay(),
-                    ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
-            };
+        if (year != null) {
+            return createYearRange(year);
         }
 
-        if ("THIS_MONTH".equals(p)) {
-            java.time.YearMonth ym = java.time.YearMonth.now();
-            return new LocalDateTime[]{
-                    ym.atDay(1).atStartOfDay(),
-                    ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
-            };
-        }
-
-        if ("LAST_MONTH".equals(p)) {
-            java.time.YearMonth ym = java.time.YearMonth.now().minusMonths(1);
-            return new LocalDateTime[]{
-                    ym.atDay(1).atStartOfDay(),
-                    ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000)
-            };
-        }
-
-        if ("THIS_YEAR".equals(p)) {
-            int y = LocalDateTime.now().getYear();
-            return createYearRange(y);
-        }
-
-        if ("LAST_YEAR".equals(p)) {
-            int y = LocalDateTime.now().getYear() - 1;
-            return createYearRange(y);
-        }
-
-        if ("THIS_WEEK".equals(p)) {
-            java.time.LocalDate today = java.time.LocalDate.now();
-            java.time.LocalDate monday = today.with(java.time.DayOfWeek.MONDAY);
-            java.time.LocalDate sunday = today.with(java.time.DayOfWeek.SUNDAY);
-
-            return new LocalDateTime[]{
-                    monday.atStartOfDay(),
-                    sunday.atTime(23, 59, 59, 999_000_000)
-            };
-        }
-
-        if ("LAST_WEEK".equals(p)) {
-            java.time.LocalDate lastWeekDay = java.time.LocalDate.now().minusWeeks(1);
-            java.time.LocalDate monday = lastWeekDay.with(java.time.DayOfWeek.MONDAY);
-            java.time.LocalDate sunday = lastWeekDay.with(java.time.DayOfWeek.SUNDAY);
-
-            return new LocalDateTime[]{
-                    monday.atStartOfDay(),
-                    sunday.atTime(23, 59, 59, 999_000_000)
-            };
-        }
+        return null;
     }
-
-    if (year != null) {
-        return createYearRange(year);
-    }
-
-    return null;
-}
 
     private LocalDateTime[] createYearRange(int year) {
         return new LocalDateTime[]{
@@ -223,10 +223,10 @@ public class StatsService {
         }
         return minTimeSec;
     }
-    
+
     private GlobalSummaryStats calculateAndSaveInitialStats() {
         GlobalSummaryStats initialStats = activityRepository.calculateAggregatedSummary();
-        
+
         if (initialStats == null) {
             initialStats = GlobalSummaryStats.builder().id(1L).build();
         }

@@ -1,6 +1,15 @@
 package com.running.api.service;
 
-import com.running.api.dto.*;
+import com.running.api.dto.CardiacDriftResponseDto;
+import com.running.api.dto.EddingtonStatsDto;
+import com.running.api.dto.HrZoneDetailDto;
+import com.running.api.dto.HrZonesMapDto;
+import com.running.api.dto.HrZonesResponseDto;
+import com.running.api.dto.PmcPointDto;
+import com.running.api.dto.RacePredictionsDto;
+import com.running.api.dto.SplitDto;
+import com.running.api.dto.TrainingLoadResponseDto;
+import com.running.api.dto.Vo2MaxVamResponseDto;
 import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
@@ -52,7 +61,7 @@ public class AnalyticsService {
         double targetMeters = 1000.0;
         int startIndex = 0;
 
-        for (int i = 0; i < points.size(); i++) {            
+        for (int i = 0; i < points.size(); i++) {
             ActivityTrackpoint pt = points.get(i);
 
             if (pt.getDistanceMeters() != null && pt.getDistanceMeters() >= targetMeters) {
@@ -464,8 +473,8 @@ public class AnalyticsService {
         double atl = 0.0;
 
         // Factores de suavizado para 42 días (CTL) y 7 días (ATL)
-        double alphaCtl = 1.0 - Math.exp(-1.0 / PMC_CTL_DAYS);
-        double alphaAtl = 1.0 - Math.exp(-1.0 / PMC_ATL_DAYS);
+        double alphaCtl = 1.0 - Math.exp(-1.0 / PMC_CTL_DAYS); // ~0.0235
+        double alphaAtl = 1.0 - Math.exp(-1.0 / PMC_ATL_DAYS);  // ~0.1331
 
         // 3. Iteración DÍA A DÍA CALENDARIO contigua (procesa días de descanso con 0.0 TRIMP)
         LocalDate current = warmUpStartDate;
@@ -526,21 +535,21 @@ public class AnalyticsService {
 
     public AcwrStatusDto calculateCurrentAcwr() {
         LocalDate today = LocalDate.now();
-        
+
         // Obtenemos la fecha de la primera actividad en la BD (o 1 año atrás por defecto)
         LocalDate earliestDate = activityRepository.findEarliestActivityDate()
                 .orElse(today.minusYears(1));
 
         // Calculamos el historial del PMC procesando la inercia real desde la primera carrera
         List<PmcPointDto> pmcHistory = calculatePmcHistory(earliestDate, today);
-        
+
         if (pmcHistory.isEmpty()) {
             return new AcwrStatusDto(today, 0.0, 0.0, 0.0, "UNDETERMINED", "Sin datos suficientes.");
         }
 
         // Tomamos el último punto calculado (correspondiente al día de hoy)
         PmcPointDto latest = pmcHistory.get(pmcHistory.size() - 1);
-        
+
         double acute = latest.atl();
         double chronic = latest.ctl();
         double acwr = (chronic > 0) ? roundTwoDecimals(acute / chronic) : 0.0;
@@ -564,5 +573,4 @@ public class AnalyticsService {
 
         return new AcwrStatusDto(latest.date(), acute, chronic, acwr, zone, recommendation);
     }
-
 }

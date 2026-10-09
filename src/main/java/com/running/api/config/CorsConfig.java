@@ -17,13 +17,13 @@ public class CorsConfig {
         return new WebMvcConfigurer() {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
-                registry.addMapping("/**") // Aplica a todas las rutas de la API
-                        .allowedOriginPatterns(allowedOrigins) // Orígenes permitidos (soporta patrones y credenciales)
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS") // Métodos HTTP
-                        .allowedHeaders("*") // Permite todos los encabezados
-                        .exposedHeaders("Authorization", "Content-Disposition") // Encabezados visibles al frontend
-                        .allowCredentials(true) // Permite cookies / autenticación
-                        .maxAge(3600); // Tiempo de cache del Preflight (en segundos)
+                registry.addMapping("/**")
+                        .allowedOriginPatterns(allowedOrigins)
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+                        .allowedHeaders("*")
+                        .exposedHeaders("Authorization", "Content-Disposition")
+                        .allowCredentials(true)
+                        .maxAge(3600);
             }
         };
     }

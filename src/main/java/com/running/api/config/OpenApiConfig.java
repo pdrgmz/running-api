@@ -30,4 +30,3 @@ public class OpenApiConfig {
                         .contact(new Contact().name("Running API Support")));
     }
 }
-
