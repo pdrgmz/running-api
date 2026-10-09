@@ -9,7 +9,32 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+
 import java.util.*;
+
+import com.running.api.dto.DaytimeStatsDto;
+import com.running.api.dto.EddingtonStatsDto;
+import com.running.api.dto.PmcPointDto;
+import com.running.api.dto.StreakStatsDto;
+import com.running.api.dto.WeekdayStatsDto;
+import com.running.api.repository.ActivityRepository;
+import com.running.api.repository.projection.DailyTrimpProjection;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -424,4 +449,91 @@ public class AnalyticsService {
 
         return modified;
     }
+
+    public List<PmcPointDto> calculatePmcHistory(LocalDate startDate, LocalDate endDate) {
+        // 1. Obtener la suma diaria de TRIMP acumulada por fecha
+        Map<LocalDate, Double> dailyTrimpMap = activityRepository.findDailyTrimpSum(startDate.minusDays(42), endDate)
+            .stream()
+            .collect(Collectors.toMap(DailyTrimpProjection::getDate, DailyTrimpProjection::getTotalTrimp));
+
+        List<PmcPointDto> pmcSeries = new ArrayList<>();
+        double ctl = 0.0;
+        double atl = 0.0;
+
+        double alphaCtl = 1.0 - Math.exp(-1.0 / 42.0);
+        double alphaAtl = 1.0 - Math.exp(-1.0 / 7.0);
+
+        LocalDate current = startDate.minusDays(42); // Warm-up para estabilizar la curva
+        while (!current.isAfter(endDate)) {
+            double dailyTrimp = dailyTrimpMap.getOrDefault(current, 0.0);
+
+            ctl = ctl + alphaCtl * (dailyTrimp - ctl);
+            atl = atl + alphaAtl * (dailyTrimp - atl);
+            double tsb = ctl - atl;
+            double acwr = ctl > 0 ? (atl / ctl) : 0.0;
+
+            if (!current.isBefore(startDate)) {
+                pmcSeries.add(new PmcPointDto(current, dailyTrimp, ctl, atl, tsb, acwr));
+            }
+
+            current = current.plusDays(1);
+        }
+
+        return pmcSeries;
+    }
+
+    public EddingtonStatsDto calculateEddingtonNumber() {
+        // Agrupa distancia total por día redondeada a entero (en km)
+        List<Integer> dailyDistancesKm = activityRepository.findDailyDistancesKmDescending();
+
+        int eddingtonNumber = 0;
+        for (int i = 0; i < dailyDistancesKm.size(); i++) {
+            int targetKm = i + 1;
+            if (dailyDistancesKm.get(i) >= targetKm) {
+                eddingtonNumber = targetKm;
+            } else {
+                break;
+            }
+        }
+
+        int nextE = eddingtonNumber + 1;
+        long runsForNext = dailyDistancesKm.stream().filter(km -> km >= nextE).count();
+        int remainingRuns = nextE - (int) runsForNext;
+
+        return new EddingtonStatsDto(eddingtonNumber, (int) runsForNext, remainingRuns, nextE);
+    }
+
+    public AcwrStatusDto calculateCurrentAcwr() {
+
+        LocalDate today = LocalDate.now();
+        // Obtenemos los últimos puntos PMC para evaluar el día de hoy
+        List<PmcPointDto> pmcHistory = calculatePmcHistory(today.minusDays(1), today);
+
+        if (pmcHistory.isEmpty()) {
+            return new AcwrStatusDto(today, 0.0, 0.0, 0.0, "UNDETERMINED", "Sin datos suficientes para calcular la carga.");
+        }
+
+        PmcPointDto latest = pmcHistory.get(pmcHistory.size() - 1);
+        double acwr = latest.acwr();
+
+        String zone;
+        String recommendation;
+
+        if (acwr < 0.80) {
+            zone = "UNDERTRAINING";
+            recommendation = "Carga baja (Sub-entrenamiento). Riesgo de pérdida de condición física si se mantiene prolongadamente.";
+        } else if (acwr <= 1.30) {
+            zone = "SWEET_SPOT";
+            recommendation = "Zona Dulce (0.8 - 1.3). Carga óptima que minimiza el riesgo de lesión y maximiza la adaptación.";
+        } else if (acwr <= 1.50) {
+            zone = "HIGH_RISK";
+            recommendation = "Atención: Incremento rápido de carga. Monitorear fatiga muscular.";
+        } else {
+            zone = "DANGER_ZONE";
+            recommendation = "Peligro (> 1.5): Pico de carga excesivo. Riesgo de lesión significativamente elevado. Se recomienda descargar.";
+}
+
+    return new AcwrStatusDto(latest.date(), latest.atl(), latest.ctl(), acwr, zone, recommendation);
+}
+
 }
