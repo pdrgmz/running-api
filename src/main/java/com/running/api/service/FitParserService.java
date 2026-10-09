@@ -87,6 +87,9 @@ public class FitParserService {
         int maxHr = 0;
         long sumHr = 0;
         int countHr = 0;
+        int maxCadence = 0;
+        long sumCadence = 0;
+        int countCadence = 0;
         double calculatedMaxSpeed = 0.0;
         double prevAlt = NO_DATA_ALTITUDE;
         double elevationGain = 0.0;
