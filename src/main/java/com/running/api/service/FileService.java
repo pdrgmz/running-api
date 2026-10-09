@@ -15,13 +15,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 @Service
@@ -39,6 +40,7 @@ public class FileService {
     private final StatsService statsService;
 
    
+    @Transactional
     public Activity createActivity(Activity activity) {
         Activity saved = activityRepository.save(activity);       
         
@@ -70,6 +72,7 @@ public class FileService {
                 .orElseGet(() -> GlobalSummaryStats.builder().id(1L).build());
     }
 
+    @Transactional
     public Activity saveTcxFile(MultipartFile file) throws Exception {
         try (InputStream is = file.getInputStream()) {
             Activity activity = tcxParserService.parse(is);
@@ -79,14 +82,16 @@ public class FileService {
         }
     }
     
+    @Transactional
     public Activity saveTcxInputStream(InputStream is) throws Exception {
         byte[] bytes = is.readAllBytes();
-        Activity activity = tcxParserService.parse(new java.io.ByteArrayInputStream(bytes));
-        String backupPath = backupStorageService.store(new java.io.ByteArrayInputStream(bytes), activity.getId());
+        Activity activity = tcxParserService.parse(new ByteArrayInputStream(bytes));
+        String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId());
         activity.setBackupFilePath(backupPath);
         return createActivity(activity);
     }
     
+    @Transactional
     public BulkFileUploadResponseDto saveBulkTcxFiles(MultipartFile file) {
 
         int successCount = 0;
@@ -129,7 +134,7 @@ public class FileService {
         int totalProcessed = 0;
         List<String> errors = new ArrayList<>();
 
-        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(file.getInputStream())) {
+        try (ZipInputStream zis = new ZipInputStream(file.getInputStream())) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 if (entry.isDirectory()) continue;
@@ -138,7 +143,7 @@ public class FileService {
                     totalProcessed++;
                     try {
                         byte[] entryData = zis.readAllBytes();
-                        saveTcxInputStream(new java.io.ByteArrayInputStream(entryData));
+                        saveTcxInputStream(new ByteArrayInputStream(entryData));
                         successCount++;
                     } catch (Exception e) {
                         errorCount++;
@@ -171,7 +176,7 @@ public class FileService {
         try (ZipOutputStream zos = new ZipOutputStream(response.getOutputStream())) {
             for (Activity activity : activities) {
                 String jsonStr = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(activity);
-                ZipEntry entry = new ZipEntry("activity_" + activity.getId().replaceAll("[:.]", "-") + ".json");
+                ZipEntry entry = new ZipEntry("activity_" + activity.getId().replace(":", "-").replace(".", "-") + ".json");
                 zos.putNextEntry(entry);
                 zos.write(jsonStr.getBytes());
                 zos.closeEntry();

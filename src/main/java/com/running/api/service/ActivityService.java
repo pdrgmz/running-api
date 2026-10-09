@@ -1,33 +1,23 @@
 package com.running.api.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
-import com.running.api.repository.ActivityRepository;
 import com.running.api.model.ActivityTrackpoint;
+import com.running.api.model.GlobalSummaryStats;
+import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
-import com.running.api.model.GlobalSummaryStats;
-
-import jakarta.servlet.http.HttpServletResponse;
+import com.running.api.repository.PersonalRecordRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.multipart.MultipartFile;
 
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
-
-import com.running.api.repository.PersonalRecordRepository;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -42,11 +32,6 @@ public class ActivityService {
     private final StatsService statsService;
 
     @Transactional(readOnly = true)
-    public List<Activity> getAllActivities() {
-        return activityRepository.findAll();
-    }
-
-    @Transactional(readOnly = true)
     public Page<Activity> getAllActivities(Pageable pageable) {
         return activityRepository.findAll(pageable);
     }
@@ -54,15 +39,6 @@ public class ActivityService {
     @Transactional(readOnly = true)
     public Optional<Activity> getActivityById(String id) {
         return activityRepository.findById(id);
-    }
-
-    private void recalculateGlobalSummaryStats() {
-        summaryStatsRepository.deleteAll();
-        GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary();
-        if (newStats == null) {
-            newStats = GlobalSummaryStats.builder().id(1L).build();
-        }
-        summaryStatsRepository.save(newStats);
     }
 
     public List<ActivityTrackpoint> getActivityTrackpointsById(String id) {

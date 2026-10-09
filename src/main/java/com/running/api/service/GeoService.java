@@ -5,25 +5,38 @@ import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
+import com.running.api.repository.ActivityTrackpointRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
 public class GeoService {
 
     private final ActivityRepository activityRepository;
+    private final ActivityTrackpointRepository trackpointRepository;
 
+    @Transactional(readOnly = true)
     public GeoJsonDto exportGeoJson(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
+        List<ActivityTrackpoint> trackpoints = trackpointRepository.findByActivityIdOrderByTimestampAsc(activityId);
+
         List<List<Double>> coordinates = new ArrayList<>();
-        for (ActivityTrackpoint pt : activity.getTrackpoints()) {
+        for (ActivityTrackpoint pt : trackpoints) {
             if (pt.getLatitude() != null && pt.getLongitude() != null) {
-                coordinates.add(List.of(pt.getLongitude(), pt.getLatitude(), pt.getAltitudeMeters() != null ? pt.getAltitudeMeters() : 0.0));
+                coordinates.add(List.of(
+                        pt.getLongitude(),
+                        pt.getLatitude(),
+                        pt.getAltitudeMeters() != null ? pt.getAltitudeMeters() : 0.0
+                ));
             }
         }
 
@@ -49,11 +62,14 @@ public class GeoService {
                 .build();
     }
 
+    @Transactional(readOnly = true)
     public String exportGpx(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
-        StringBuilder gpx = new StringBuilder();
+        List<ActivityTrackpoint> trackpoints = trackpointRepository.findByActivityIdOrderByTimestampAsc(activityId);
+
+        StringBuilder gpx = new StringBuilder(1024);
         gpx.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         gpx.append("<gpx version=\"1.1\" creator=\"Running API\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n");
         gpx.append("  <metadata>\n");
@@ -64,7 +80,7 @@ public class GeoService {
         gpx.append("    <name>").append(activity.getName()).append("</name>\n");
         gpx.append("    <trkseg>\n");
 
-        for (ActivityTrackpoint pt : activity.getTrackpoints()) {
+        for (ActivityTrackpoint pt : trackpoints) {
             if (pt.getLatitude() != null && pt.getLongitude() != null) {
                 gpx.append(String.format(Locale.US, "      <trkpt lat=\"%.6f\" lon=\"%.6f\">\n", pt.getLatitude(), pt.getLongitude()));
                 if (pt.getAltitudeMeters() != null) {

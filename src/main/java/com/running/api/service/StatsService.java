@@ -17,7 +17,11 @@ import com.running.api.repository.PersonalRecordRepository;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -37,11 +41,6 @@ public class StatsService {
         put("21k", 21097.5);
         put("42k", 42195.0);
     }};
-
-    @Transactional(readOnly = true)
-    public SummaryStatsDto getGlobalSummary() {
-        return getSummary(null, null);
-    }
 
     @Transactional(readOnly = true)
     public SummaryStatsDto getSummary(String period, Integer year) {

@@ -1,5 +1,6 @@
 package com.running.api.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -7,9 +8,13 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.*;
+import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 public class BackupStorageService {
+
+    private static final Pattern UNSAFE_CHARS = Pattern.compile("[:.]");
 
     private final Path rootLocation;
 
@@ -32,9 +37,13 @@ public class BackupStorageService {
 
     public String store(InputStream inputStream, String activityId) {
         try {
-            String sanitizedId = activityId.replaceAll("[:.]", "-");
+            String sanitizedId = UNSAFE_CHARS.matcher(activityId).replaceAll("-");
             String filename = "backup_" + sanitizedId + ".tcx";
-            Path destinationFile = this.rootLocation.resolve(Paths.get(filename)).normalize().toAbsolutePath();
+            Path destinationFile = this.rootLocation.resolve(filename).normalize().toAbsolutePath();
+
+            if (!destinationFile.startsWith(this.rootLocation.normalize().toAbsolutePath())) {
+                throw new SecurityException("Ruta de archivo inválida: " + filename);
+            }
 
             Files.copy(inputStream, destinationFile, StandardCopyOption.REPLACE_EXISTING);
             return destinationFile.toString();
@@ -51,15 +60,17 @@ public class BackupStorageService {
         try {
             if (Files.exists(rootLocation)) {
                 try (var stream = Files.walk(rootLocation)) {
-                    stream.filter(Files::isRegularFile)
-                          .forEach(path -> {
-                              try {
-                                  Files.deleteIfExists(path);
-                              } catch (IOException ignored) {}
-                          });
+                    stream.filter(Files::isRegularFile).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException e) {
+                            log.warn("No se pudo eliminar el archivo: {}", path, e);
+                        }
+                    });
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (IOException e) {
+            log.error("Error al limpiar el almacenamiento", e);
+        }
     }
 }
-

@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 import com.running.api.repository.projection.DailyTrimpProjection;
 
@@ -69,4 +70,7 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
         ORDER BY 1 DESC
     """)
     List<Integer> findDailyDistancesKmDescending();
+
+    @Query("SELECT MIN(CAST(a.startTime AS java.time.LocalDate)) FROM Activity a")
+       Optional<LocalDate> findEarliestActivityDate();
 }

@@ -26,7 +26,7 @@ public class FilesController {
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
     @Operation(summary = "Importar un archivo TCX individual", description = "Parsea e inserta la actividad en la BD y guarda el archivo físico de respaldo.")
     public ResponseEntity<FileUploadResponseDto> uploadSingleTcx(@RequestParam("file") MultipartFile file) throws Exception {
-        Activity activity = fileService.saveTcxFile(file);
+        Activity activity = fileService.saveTcxFile(file); 
         FileUploadResponseDto response = FileUploadResponseDto.builder()
                 .message("Carrera importada y respaldada con éxito")
                 .activityId(activity.getId())

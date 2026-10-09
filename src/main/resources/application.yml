@@ -29,7 +29,11 @@ app:
   user:
     max-hr: 185 # Pulsaciones máximas por defecto para zonas FC
   elevation:
-    min-threshold-meters: 0.1 # Umbral de histeresis para filtrar ruido GPS en elevación
+    min-threshold-meters: 0.1 # Umbral de histéresis para filtrar ruido GPS en elevación
+  cors:
+    allowed-origins: http://localhost:3000,http://localhost:5173,https://running-api.pdrgmz.uk,http://running-api.pdrgmz.uk
+  openapi:
+    server-url: https://running-api.pdrgmz.uk
 
 springdoc:
   api-docs:

@@ -5,32 +5,12 @@ import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
+import com.running.api.repository.projection.DailyTrimpProjection;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.time.DayOfWeek;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
-
-import java.util.*;
-
-import com.running.api.dto.DaytimeStatsDto;
-import com.running.api.dto.EddingtonStatsDto;
-import com.running.api.dto.PmcPointDto;
-import com.running.api.dto.StreakStatsDto;
-import com.running.api.dto.WeekdayStatsDto;
-import com.running.api.repository.ActivityRepository;
-import com.running.api.repository.projection.DailyTrimpProjection;
-
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +19,19 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class AnalyticsService {
+
+    private static final int RESTING_HEART_RATE = 60;
+    private static final double ELEVATION_NOISE_THRESHOLD = 0.01;
+    private static final double MIN_VALID_SPEED = 1.5;
+    private static final double MAX_VALID_SPEED = 15.0;
+    private static final double MIN_VO2MAX = 20.0;
+    private static final double MAX_VO2MAX = 85.0;
+    private static final double DEFAULT_VO2MAX = 35.0;
+    private static final double MIN_VO2MAX_FLOOR = 15.0;
+    private static final double PMC_CTL_DAYS = 42.0;
+    private static final double PMC_ATL_DAYS = 7.0;
+    private static final int PMC_WARMUP_DAYS = 120;
+    private static final double NO_DATA_ALTITUDE = -999.0;
 
     private final ActivityRepository activityRepository;
 
@@ -203,7 +196,7 @@ public class AnalyticsService {
     public TrainingLoadResponseDto computeTrainingLoadDetails(Activity activity) {
         List<ActivityTrackpoint> trackpoints = activity.getTrackpoints();
         int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
-        int restHr = 60;
+        int restHr = RESTING_HEART_RATE;
 
         double edwardsTrimp = 0.0;
         double totalSecondsWithHr = 0.0;
@@ -276,7 +269,7 @@ public class AnalyticsService {
     public Vo2MaxVamResponseDto computeVo2MaxAndVamDetails(Activity activity) {
         List<ActivityTrackpoint> trackpoints = activity.getTrackpoints();
         int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
-        int restHr = 60;
+        int restHr = RESTING_HEART_RATE;
 
         Double estimatedVo2Max = null;
 
@@ -285,12 +278,12 @@ public class AnalyticsService {
             for (ActivityTrackpoint pt : trackpoints) {
                 Double speed = pt.getSpeed();
                 Integer hr = pt.getHeartRate();
-                if (speed != null && speed > 1.5 && speed < 15.0 && hr != null && hr > (restHr + 30)) {
+                if (speed != null && speed > MIN_VALID_SPEED && speed < MAX_VALID_SPEED && hr != null && hr > (restHr + 30)) {
                     double speedMPerMin = speed * 60.0;
                     double vo2Cost = (speedMPerMin * 0.2) + 3.5;
                     double fractionHrr = Math.max(0.2, Math.min(1.0, (double) (hr - restHr) / (maxHr - restHr)));
                     double vo2MaxEst = vo2Cost / fractionHrr;
-                    if (vo2MaxEst >= 20.0 && vo2MaxEst <= 85.0) {
+                    if (vo2MaxEst >= MIN_VO2MAX && vo2MaxEst <= MAX_VO2MAX) {
                         vo2Samples.add(vo2MaxEst);
                     }
                 }
@@ -305,7 +298,7 @@ public class AnalyticsService {
         if (estimatedVo2Max == null) {
             Double avgSpeed = activity.getAvgSpeed();
             Integer avgHr = activity.getAvgHeartRate();
-            if (avgSpeed != null && avgSpeed > 1.5 && avgHr != null && avgHr > restHr) {
+            if (avgSpeed != null && avgSpeed > MIN_VALID_SPEED && avgHr != null && avgHr > restHr) {
                 double speedMPerMin = avgSpeed * 60.0;
                 double vo2Cost = (speedMPerMin * 0.2) + 3.5;
                 double fractionHrr = Math.max(0.2, Math.min(1.0, (double) (avgHr - restHr) / (maxHr - restHr)));
@@ -319,16 +312,16 @@ public class AnalyticsService {
             }
         }
 
-        if (estimatedVo2Max == null || estimatedVo2Max < 15.0) {
-            estimatedVo2Max = 35.0;
+        if (estimatedVo2Max == null || estimatedVo2Max < MIN_VO2MAX_FLOOR) {
+            estimatedVo2Max = DEFAULT_VO2MAX;
         }
 
         double finalVo2Max = Math.round(estimatedVo2Max * 10.0) / 10.0;
         double vamKmH = Math.round((finalVo2Max / 3.5) * 100.0) / 100.0;
 
         String fitnessCategory;
-        if (finalVo2Max < 35.0) fitnessCategory = "Inicial / Principiante";
-        else if (finalVo2Max < 42.0) fitnessCategory = "Recreativo / Medio";
+        if (finalVo2Max < DEFAULT_VO2MAX) fitnessCategory = "Inicial / Principiante";
+        else if (finalVo2Max < PMC_CTL_DAYS) fitnessCategory = "Recreativo / Medio";
         else if (finalVo2Max < 50.0) fitnessCategory = "Intermedio / Bueno";
         else if (finalVo2Max < 60.0) fitnessCategory = "Avanzado / Excelente";
         else fitnessCategory = "Elite / Atleta de Alto Rendimiento";
@@ -425,12 +418,12 @@ public class AnalyticsService {
                 && points != null && !points.isEmpty()) {
             double calcGain = 0.0;
             double calcLoss = 0.0;
-            double prevAlt = -999.0;
+            double prevAlt = NO_DATA_ALTITUDE;
             for (ActivityTrackpoint pt : points) {
-                if (pt.getAltitudeMeters() != null && pt.getAltitudeMeters() != -999.0) {
-                    if (prevAlt != -999.0) {
+                if (pt.getAltitudeMeters() != null && pt.getAltitudeMeters() != NO_DATA_ALTITUDE) {
+                    if (prevAlt != NO_DATA_ALTITUDE) {
                         double diff = pt.getAltitudeMeters() - prevAlt;
-                        if (Math.abs(diff) > 0.01) {
+                        if (Math.abs(diff) > ELEVATION_NOISE_THRESHOLD) {
                             if (diff > 0) calcGain += diff;
                             else calcLoss += Math.abs(diff);
                             prevAlt = pt.getAltitudeMeters();
@@ -451,35 +444,63 @@ public class AnalyticsService {
     }
 
     public List<PmcPointDto> calculatePmcHistory(LocalDate startDate, LocalDate endDate) {
-        // 1. Obtener la suma diaria de TRIMP acumulada por fecha
-        Map<LocalDate, Double> dailyTrimpMap = activityRepository.findDailyTrimpSum(startDate.minusDays(42), endDate)
-            .stream()
-            .collect(Collectors.toMap(DailyTrimpProjection::getDate, DailyTrimpProjection::getTotalTrimp));
+        // 1. Ampliamos el rango de búsqueda 120 días atrás para el "warm-up" del algoritmo EWMA
+        LocalDate warmUpStartDate = startDate.minusDays(PMC_WARMUP_DAYS);
+
+        // 2. Mapeamos la suma de TRIMP agrupada por fecha desde la BD
+        Map<LocalDate, Double> dailyTrimpMap = activityRepository
+        .findDailyTrimpSum(warmUpStartDate, endDate)
+        .stream()
+        .collect(Collectors.toMap(
+                DailyTrimpProjection::getDate,
+                DailyTrimpProjection::getTotalTrimp,
+                Double::sum // <--- MERGE FUNCTION: Suma las cargas si hay múltiples filas/carreras el mismo día
+        ));
 
         List<PmcPointDto> pmcSeries = new ArrayList<>();
+
+        // Variables de estado iniciales para EWMA
         double ctl = 0.0;
         double atl = 0.0;
 
-        double alphaCtl = 1.0 - Math.exp(-1.0 / 42.0);
-        double alphaAtl = 1.0 - Math.exp(-1.0 / 7.0);
+        // Factores de suavizado para 42 días (CTL) y 7 días (ATL)
+        double alphaCtl = 1.0 - Math.exp(-1.0 / PMC_CTL_DAYS);
+        double alphaAtl = 1.0 - Math.exp(-1.0 / PMC_ATL_DAYS);
 
-        LocalDate current = startDate.minusDays(42); // Warm-up para estabilizar la curva
+        // 3. Iteración DÍA A DÍA CALENDARIO contigua (procesa días de descanso con 0.0 TRIMP)
+        LocalDate current = warmUpStartDate;
         while (!current.isAfter(endDate)) {
             double dailyTrimp = dailyTrimpMap.getOrDefault(current, 0.0);
 
+            // Fórmulas de acumulación y decaimiento exponencial
             ctl = ctl + alphaCtl * (dailyTrimp - ctl);
             atl = atl + alphaAtl * (dailyTrimp - atl);
-            double tsb = ctl - atl;
-            double acwr = ctl > 0 ? (atl / ctl) : 0.0;
 
+            double tsb = ctl - atl;
+            // A:C Ratio instantáneo = ATL / CTL
+            double acwr = (ctl > 0) ? (atl / ctl) : 0.0;
+
+            // 4. Solo guardamos en el resultado los días dentro del rango solicitado por el usuario
             if (!current.isBefore(startDate)) {
-                pmcSeries.add(new PmcPointDto(current, dailyTrimp, ctl, atl, tsb, acwr));
+                pmcSeries.add(new PmcPointDto(
+                        current,
+                        roundTwoDecimals(dailyTrimp),
+                        roundTwoDecimals(ctl),
+                        roundTwoDecimals(atl),
+                        roundTwoDecimals(tsb),
+                        roundTwoDecimals(acwr)
+                ));
             }
 
             current = current.plusDays(1);
         }
 
         return pmcSeries;
+    }
+
+    // Método utilitario para redondear a 2 decimales (ej. 1.31)
+    private double roundTwoDecimals(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     public EddingtonStatsDto calculateEddingtonNumber() {
@@ -504,36 +525,44 @@ public class AnalyticsService {
     }
 
     public AcwrStatusDto calculateCurrentAcwr() {
-
         LocalDate today = LocalDate.now();
-        // Obtenemos los últimos puntos PMC para evaluar el día de hoy
-        List<PmcPointDto> pmcHistory = calculatePmcHistory(today.minusDays(1), today);
+        
+        // Obtenemos la fecha de la primera actividad en la BD (o 1 año atrás por defecto)
+        LocalDate earliestDate = activityRepository.findEarliestActivityDate()
+                .orElse(today.minusYears(1));
 
+        // Calculamos el historial del PMC procesando la inercia real desde la primera carrera
+        List<PmcPointDto> pmcHistory = calculatePmcHistory(earliestDate, today);
+        
         if (pmcHistory.isEmpty()) {
-            return new AcwrStatusDto(today, 0.0, 0.0, 0.0, "UNDETERMINED", "Sin datos suficientes para calcular la carga.");
+            return new AcwrStatusDto(today, 0.0, 0.0, 0.0, "UNDETERMINED", "Sin datos suficientes.");
         }
 
+        // Tomamos el último punto calculado (correspondiente al día de hoy)
         PmcPointDto latest = pmcHistory.get(pmcHistory.size() - 1);
-        double acwr = latest.acwr();
+        
+        double acute = latest.atl();
+        double chronic = latest.ctl();
+        double acwr = (chronic > 0) ? roundTwoDecimals(acute / chronic) : 0.0;
 
         String zone;
         String recommendation;
 
         if (acwr < 0.80) {
             zone = "UNDERTRAINING";
-            recommendation = "Carga baja (Sub-entrenamiento). Riesgo de pérdida de condición física si se mantiene prolongadamente.";
+            recommendation = "Carga baja (Sub-entrenamiento). Riesgo de pérdida de condición física.";
         } else if (acwr <= 1.30) {
             zone = "SWEET_SPOT";
-            recommendation = "Zona Dulce (0.8 - 1.3). Carga óptima que minimiza el riesgo de lesión y maximiza la adaptación.";
+            recommendation = "Zona Dulce (0.8 - 1.3). Carga óptima que minimiza el riesgo de lesión.";
         } else if (acwr <= 1.50) {
             zone = "HIGH_RISK";
             recommendation = "Atención: Incremento rápido de carga. Monitorear fatiga muscular.";
         } else {
             zone = "DANGER_ZONE";
-            recommendation = "Peligro (> 1.5): Pico de carga excesivo. Riesgo de lesión significativamente elevado. Se recomienda descargar.";
-}
+            recommendation = "Peligro (> 1.5): Pico de carga excesivo. Riesgo de lesión elevado.";
+        }
 
-    return new AcwrStatusDto(latest.date(), latest.atl(), latest.ctl(), acwr, zone, recommendation);
-}
+        return new AcwrStatusDto(latest.date(), acute, chronic, acwr, zone, recommendation);
+    }
 
 }
