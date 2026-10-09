@@ -2,25 +2,22 @@ package com.running.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.running.api.dto.BulkFileUploadResponseDto;
-import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
+import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
-import com.running.api.model.GlobalSummaryStats;
-
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayInputStream;
-import java.io.File;
-import java.io.InputStream;
+import java.io.*;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -29,28 +26,29 @@ import java.util.zip.ZipOutputStream;
 @RequiredArgsConstructor
 public class FileService {
 
+    private static final String TCX_EXTENSION = ".tcx";
+    private static final String GPX_EXTENSION = ".gpx";
+    private static final String FIT_EXTENSION = ".fit";
+
     private final ActivityRepository activityRepository;
     private final TcxParserService tcxParserService;
+    private final GpxParserService gpxParserService;
+    private final FitParserService fitParserService;
     private final BackupStorageService backupStorageService;
-    
     private final ObjectMapper objectMapper;
-
-    private final GlobalSummaryStatsRepository summaryStatsRepository;    
+    private final GlobalSummaryStatsRepository summaryStatsRepository;
     private final ActivityTrackpointRepository trackpointRepository;
     private final StatsService statsService;
 
-   
     @Transactional
     public Activity createActivity(Activity activity) {
-        Activity saved = activityRepository.save(activity);       
-        
+        Activity saved = activityRepository.save(activity);
         updateStatsOnCreate(saved);
-        statsService.checkAndSetPersonalRecords(saved);       
+        statsService.checkAndSetPersonalRecords(saved);
         return saved;
     }
 
     private void updateStatsOnCreate(Activity a) {
-
         GlobalSummaryStats stats = getOrCreateStats();
 
         stats.setTotalActivities(stats.getTotalActivities() + 1);
@@ -64,7 +62,6 @@ public class FileService {
         }
 
         summaryStatsRepository.save(stats);
-        
     }
 
     private GlobalSummaryStats getOrCreateStats() {
@@ -73,32 +70,56 @@ public class FileService {
     }
 
     @Transactional
-    public Activity saveTcxFile(MultipartFile file) throws Exception {
+    public Activity saveActivityFile(MultipartFile file) throws Exception {
+        String filename = file.getOriginalFilename() != null ? file.getOriginalFilename().toLowerCase() : "";
+        String fileType = detectFileType(filename);
+
         try (InputStream is = file.getInputStream()) {
-            Activity activity = tcxParserService.parse(is);
+            Activity activity = parseFile(is, fileType);
+            activity.setSourceFileType(fileType);
+
             String backupPath = backupStorageService.store(file, activity.getId());
             activity.setBackupFilePath(backupPath);
+
             return createActivity(activity);
         }
     }
-    
+
     @Transactional
-    public Activity saveTcxInputStream(InputStream is) throws Exception {
+    public Activity saveActivityInputStream(InputStream is, String fileType) throws Exception {
         byte[] bytes = is.readAllBytes();
-        Activity activity = tcxParserService.parse(new ByteArrayInputStream(bytes));
+        Activity activity = parseFile(new ByteArrayInputStream(bytes), fileType);
+        activity.setSourceFileType(fileType);
+
         String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId());
         activity.setBackupFilePath(backupPath);
+
         return createActivity(activity);
     }
-    
-    @Transactional
-    public BulkFileUploadResponseDto saveBulkTcxFiles(MultipartFile file) {
 
+    private Activity parseFile(InputStream is, String fileType) throws Exception {
+        return switch (fileType) {
+            case "tcx" -> tcxParserService.parse(is);
+            case "gpx" -> gpxParserService.parse(is);
+            case "fit" -> fitParserService.parse(is);
+            default -> throw new IllegalArgumentException("Tipo de archivo no soportado: " + fileType);
+        };
+    }
+
+    private String detectFileType(String filename) {
+        if (filename.endsWith(TCX_EXTENSION)) return "tcx";
+        if (filename.endsWith(GPX_EXTENSION)) return "gpx";
+        if (filename.endsWith(FIT_EXTENSION)) return "fit";
+        throw new IllegalArgumentException("Extensión de archivo no soportada: " + filename);
+    }
+
+    @Transactional
+    public BulkFileUploadResponseDto saveBulkFiles(MultipartFile file) {
         int successCount = 0;
         int errorCount = 0;
         List<String> errors = new ArrayList<>();
         int totalProcessed = 0;
-        
+
         String filename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "";
 
         if (filename.toLowerCase().endsWith(".zip")) {
@@ -112,13 +133,13 @@ public class FileService {
         } else {
             totalProcessed++;
             try {
-                saveTcxFile(file);
+                saveActivityFile(file);
                 successCount++;
             } catch (Exception e) {
                 errorCount++;
                 errors.add("Error en " + filename + ": " + e.getMessage());
             }
-        }        
+        }
 
         return BulkFileUploadResponseDto.builder()
                 .totalFiles(totalProcessed)
@@ -139,11 +160,14 @@ public class FileService {
             while ((entry = zis.getNextEntry()) != null) {
                 if (entry.isDirectory()) continue;
                 String entryName = entry.getName();
-                if (entryName.toLowerCase().endsWith(".tcx")) {
+                String lowerName = entryName.toLowerCase();
+
+                if (lowerName.endsWith(TCX_EXTENSION) || lowerName.endsWith(GPX_EXTENSION) || lowerName.endsWith(FIT_EXTENSION)) {
                     totalProcessed++;
                     try {
                         byte[] entryData = zis.readAllBytes();
-                        saveTcxInputStream(new ByteArrayInputStream(entryData));
+                        String fileType = detectFileType(entryName);
+                        saveActivityInputStream(new ByteArrayInputStream(entryData), fileType);
                         successCount++;
                     } catch (Exception e) {
                         errorCount++;
@@ -185,13 +209,13 @@ public class FileService {
         }
     }
 
-    public void exportBulkTcxZip(List<String> ids, HttpServletResponse response) throws Exception {
+    public void exportBulkBackupZip(List<String> ids, HttpServletResponse response) throws Exception {
         List<Activity> activities = (ids != null && !ids.isEmpty())
                 ? activityRepository.findAllById(ids)
                 : activityRepository.findAll();
 
         response.setContentType("application/zip");
-        response.setHeader("Content-Disposition", "attachment; filename=\"activities_tcx_backup.zip\"");
+        response.setHeader("Content-Disposition", "attachment; filename=\"activities_backup_export.zip\"");
 
         try (ZipOutputStream zos = new ZipOutputStream(response.getOutputStream())) {
             for (Activity activity : activities) {

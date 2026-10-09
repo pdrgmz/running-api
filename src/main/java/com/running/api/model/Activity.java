@@ -76,8 +76,15 @@ public class Activity {
     @Schema(description = "Desnivel negativo acumulado (D-) en metros")
     private Double elevationLoss;
 
-    @Schema(description = "Ruta absoluta del archivo de respaldo .tcx guardado en disco")
+    @Schema(description = "Ruta absoluta del archivo de respaldo guardado en disco")
     private String backupFilePath;
+
+    @Schema(description = "Tipo de archivo fuente (tcx, gpx, fit)")
+    private String sourceFileType;
+
+    @Schema(description = "Datos adicionales en formato JSON específicos del formato de origen")
+    @Column(columnDefinition = "TEXT")
+    private String extraData;
 
     private LocalDateTime createdAt;
 

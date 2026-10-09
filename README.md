@@ -1,10 +1,10 @@
-# Running API
+# Running
 
-> API REST de analítica de carreras y procesamiento de archivos TCX
+> API REST de analítica de carreras y procesamiento de archivos TCX, GPX y FIT
 
 ## Descripción
 
-**Running API** es una aplicación backend construida con **Spring Boot 3.2** y **Java 17** que permite importar, almacenar y analizar actividades de carrera desde archivos **TCX** (formato estándar de Garmin). Ofrece métricas fisiológicas avanzadas, estadísticas acumuladas, récords personales y exportación geoespacial.
+**Running** es una aplicación backend construida con **Spring Boot 3.2** y **Java 17** que permite importar, almacenar y analizar actividades de carrera desde archivos **TCX**, **GPX** y **FIT** (formatos estándar de Garmin y otros dispositivos GPS). Ofrece métricas fisiológicas avanzadas, estadísticas acumuladas, récords personales y exportación geoespacial.
 
 ## Tabla de Contenidos
 
@@ -37,11 +37,12 @@
 ## Funcionalidades
 
 ### Gestión de Archivos
-- Importación individual de archivos `.tcx`
-- Importación masiva mediante archivos `.zip` con múltiples TCX
+- Importación individual de archivos `.tcx`, `.gpx` y `.fit`
+- Importación masiva mediante archivos `.zip` con múltiples archivos (TCX, GPX y FIT)
 - Exportación de datos en formato JSON comprimido en ZIP
-- Exportación de archivos TCX físicos en ZIP
+- Exportación de archivos físicos de respaldo en ZIP
 - Respaldo automático de archivos importados en disco
+- Almacenamiento de metadatos extraídos de cada formato en campo `extraData`
 
 ### Actividades
 - Listado paginado y ordenado de carreras
@@ -126,7 +127,9 @@ src/main/java/com/running/api/
 │   ├── AnalyticsService.java
 │   ├── BackupStorageService.java
 │   ├── FileService.java
+│   ├── FitParserService.java
 │   ├── GeoService.java
+│   ├── GpxParserService.java
 │   ├── StatsService.java
 │   └── TcxParserService.java
 └── RunningApiApplication.java
@@ -214,10 +217,10 @@ docker-compose down
 
 | Método | Path | Descripción |
 |--------|------|-------------|
-| `POST` | `/upload` | Importar un archivo TCX individual |
-| `POST` | `/upload-bulk` | Importar un ZIP con múltiples TCX |
+| `POST` | `/upload` | Importar un archivo individual (TCX, GPX o FIT) |
+| `POST` | `/upload-bulk` | Importar un ZIP con múltiples archivos (TCX, GPX y FIT) |
 | `GET` | `/export-bulk` | Exportar datos JSON en ZIP |
-| `GET` | `/export-tcx-zip` | Exportar archivos TCX en ZIP |
+| `GET` | `/export-backup-zip` | Exportar archivos físicos de respaldo en ZIP |
 
 ### Actividades (`/api/v1/activities`)
 
@@ -279,7 +282,9 @@ Entidad principal que representa una carrera con sus métricas consolidadas.
 | `vamKmH` | Double | VAM estimada (km/h) |
 | `totalCalories` | Integer | Calorías totales |
 | `elevationGain` / `elevationLoss` | Double | Desnivel +/- (m) |
-| `backupFilePath` | String | Ruta del archivo TCX de respaldo |
+| `backupFilePath` | String | Ruta del archivo de respaldo |
+| `sourceFileType` | String | Tipo de archivo fuente (tcx, gpx, fit) |
+| `extraData` | String | Datos adicionales en JSON del formato de origen |
 | `trackpoints` | List | Puntos de telemetría (LAZY) |
 
 ### ActivityTrackpoint

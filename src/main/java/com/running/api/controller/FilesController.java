@@ -18,28 +18,29 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/files")
 @RequiredArgsConstructor
-@Tag(name = "Archivos", description = "Endpoints para la importación y exportación de archivos TCX.")
+@Tag(name = "Archivos", description = "Endpoints para la importación y exportación de archivos TCX, GPX y FIT.")
 public class FilesController {
 
     private final FileService fileService;
 
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
-    @Operation(summary = "Importar un archivo TCX individual", description = "Parsea e inserta la actividad en la BD y guarda el archivo físico de respaldo.")
-    public ResponseEntity<FileUploadResponseDto> uploadSingleTcx(@RequestParam("file") MultipartFile file) throws Exception {
-        Activity activity = fileService.saveTcxFile(file); 
+    @Operation(summary = "Importar un archivo individual (TCX, GPX o FIT)", description = "Parsea e inserta la actividad en la BD y guarda el archivo físico de respaldo.")
+    public ResponseEntity<FileUploadResponseDto> uploadSingleFile(@RequestParam("file") MultipartFile file) throws Exception {
+        Activity activity = fileService.saveActivityFile(file);
         FileUploadResponseDto response = FileUploadResponseDto.builder()
                 .message("Carrera importada y respaldada con éxito")
                 .activityId(activity.getId())
                 .backupPath(activity.getBackupFilePath())
+                .sourceFileType(activity.getSourceFileType())
                 .totalPoints(activity.getTrackpoints() != null ? activity.getTrackpoints().size() : 0)
                 .build();
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @PostMapping(value = "/upload-bulk", consumes = "multipart/form-data")
-    @Operation(summary = "Importar un archivo ZIP con múltiples archivos TCX dentro", description = "Parsea el ZIP, extrae los archivos .tcx, crea las actividades en la BD y guarda los archivos físicos de respaldo.")
-    public ResponseEntity<BulkFileUploadResponseDto> uploadBulkTcx(@RequestParam("zipFile") MultipartFile zipFile) throws Exception {
-        BulkFileUploadResponseDto result = fileService.saveBulkTcxFiles(zipFile);
+    @Operation(summary = "Importar un archivo ZIP con múltiples archivos (TCX, GPX o FIT) dentro", description = "Parsea el ZIP, extrae los archivos .tcx, .gpx y .fit, crea las actividades en la BD y guarda los archivos físicos de respaldo.")
+    public ResponseEntity<BulkFileUploadResponseDto> uploadBulkFiles(@RequestParam("zipFile") MultipartFile zipFile) throws Exception {
+        BulkFileUploadResponseDto result = fileService.saveBulkFiles(zipFile);
         return ResponseEntity.status(HttpStatus.MULTI_STATUS).body(result);
     }
 
@@ -49,9 +50,9 @@ public class FilesController {
         fileService.exportBulkJsonZip(ids, response);
     }
 
-    @GetMapping("/export-tcx-zip")
-    @Operation(summary = "Exportar archivos .tcx físicos de respaldo en ZIP")
-    public void exportBulkTcxZip(@RequestParam(required = false) List<String> ids, HttpServletResponse response) throws Exception {
-        fileService.exportBulkTcxZip(ids, response);
+    @GetMapping("/export-backup-zip")
+    @Operation(summary = "Exportar archivos físicos de respaldo en ZIP")
+    public void exportBulkBackupZip(@RequestParam(required = false) List<String> ids, HttpServletResponse response) throws Exception {
+        fileService.exportBulkBackupZip(ids, response);
     }
 }

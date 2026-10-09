@@ -24,4 +24,7 @@ public class FileUploadResponseDto {
 
     @Schema(description = "Total de puntos de telemetría parseados", example = "1250")
     private Integer totalPoints;
+
+    @Schema(description = "Tipo de archivo fuente (tcx, gpx, fit)", example = "tcx")
+    private String sourceFileType;
 }
