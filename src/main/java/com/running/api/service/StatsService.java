@@ -330,4 +330,10 @@ public class StatsService {
         personalRecordRepository.deleteAll();
         recalculateAllPersonalRecords();
     }
+
+    @Transactional
+    public void recalculatePersonalRecords() {
+        personalRecordRepository.deleteAll();
+        recalculateAllPersonalRecords();
+    }
 }

@@ -43,30 +43,27 @@ public class FileService {
     @Transactional
     public Activity createActivity(Activity activity) {
         Activity saved = activityRepository.save(activity);
-        updateStatsOnCreate(saved);
+        recalculateAllStats();
         statsService.checkAndSetPersonalRecords(saved);
         return saved;
     }
 
-    private void updateStatsOnCreate(Activity a) {
-        GlobalSummaryStats stats = getOrCreateStats();
-
-        stats.setTotalActivities(stats.getTotalActivities() + 1);
-        stats.setTotalDistanceMeters(stats.getTotalDistanceMeters() + (a.getDistanceMeters() != null ? a.getDistanceMeters() : 0.0));
-        stats.setTotalTimeSeconds(stats.getTotalTimeSeconds() + (a.getTotalTimeSeconds() != null ? a.getTotalTimeSeconds() : 0.0));
-        stats.setTotalElevationGain(stats.getTotalElevationGain() + (a.getElevationGain() != null ? a.getElevationGain() : 0.0));
-        stats.setTotalCalories(stats.getTotalCalories() + (a.getTotalCalories() != null ? a.getTotalCalories() : 0));
-
-        if (a.getMaxHeartRate() != null && a.getMaxHeartRate() > stats.getMaxHeartRateGlobal()) {
-            stats.setMaxHeartRateGlobal(a.getMaxHeartRate());
+    @Transactional
+    public void recalculateAllStats() {
+        GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary();
+        if (newStats == null) {
+            newStats = GlobalSummaryStats.builder()
+                    .id(1L)
+                    .totalActivities(0L)
+                    .totalDistanceMeters(0.0)
+                    .totalTimeSeconds(0.0)
+                    .totalElevationGain(0.0)
+                    .totalCalories(0L)
+                    .maxHeartRateGlobal(0)
+                    .build();
         }
-
-        summaryStatsRepository.save(stats);
-    }
-
-    private GlobalSummaryStats getOrCreateStats() {
-        return summaryStatsRepository.findById(1L)
-                .orElseGet(() -> GlobalSummaryStats.builder().id(1L).build());
+        newStats.setId(1L);
+        summaryStatsRepository.save(newStats);
     }
 
     @Transactional

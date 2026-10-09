@@ -28,8 +28,7 @@ public class ActivityService {
     private final GlobalSummaryStatsRepository summaryStatsRepository;
     private final PersonalRecordRepository personalRecordRepository;
     private final BackupStorageService backupStorageService;
-    private final AnalyticsService analyticsService;
-    private final StatsService statsService;
+    private final FileService fileService;
 
     @Transactional(readOnly = true)
     public Page<Activity> getAllActivities(Pageable pageable) {
@@ -124,14 +123,14 @@ public class ActivityService {
         if (activity.getBackupFilePath() != null) {
             try {
                 Files.deleteIfExists(Path.of(activity.getBackupFilePath()));
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+                // Archivo de respaldo ya no existe o no se puede eliminar
+            }
         }
 
         activityRepository.delete(activity);
-
-        if (statsService != null) {
-            statsService.recalculateStatsAndRecords();
-        }
+        fileService.recalculateAllStats();
+        statsService.recalculatePersonalRecords();
 
         return true;
     }
