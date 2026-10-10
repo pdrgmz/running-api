@@ -49,7 +49,9 @@ public class FitParserService {
         int localTimestamp = 0;
         long globalStartTime = 0;
 
-        while (buffer.hasRemaining() && buffer.position() < headerSize + dataSize) {
+        int dataEnd = headerSize + dataSize;
+
+        while (buffer.hasRemaining() && buffer.position() < dataEnd) {
             byte recordHeader = buffer.get();
             boolean isDefinition = (recordHeader & 0x40) != 0;
             int localMessageType = recordHeader & 0x0F;
@@ -71,6 +73,15 @@ public class FitParserService {
             } else {
                 FitRecord defRecord = findDefinition(records, localMessageType);
                 if (defRecord != null) {
+                    // Verificar que hay suficientes bytes para todos los campos
+                    int totalBytesNeeded = 0;
+                    for (FieldDefinition field : defRecord.fields) {
+                        totalBytesNeeded += field.size;
+                    }
+                    if (buffer.remaining() < totalBytesNeeded) {
+                        break; // No hay suficientes bytes, salir del bucle
+                    }
+
                     Object[] values = new Object[defRecord.fields.size()];
                     for (int i = 0; i < defRecord.fields.size(); i++) {
                         FieldDefinition field = defRecord.fields.get(i);
@@ -97,6 +108,7 @@ public class FitParserService {
         double runningTotalDistance = 0.0;
         ActivityTrackpoint prevPoint = null;
         LocalDateTime startTime = null;
+        Integer firstTimestamp = null;
 
         for (FitRecord record : records) {
             if (record.isDefinition || record.values == null) continue;
@@ -104,19 +116,20 @@ public class FitParserService {
             switch (record.globalMessageNumber) {
                 case 20 -> {
                     if (record.values.length >= 6) {
-                        Integer lat = (Integer) record.values[0];
-                        Integer lon = (Integer) record.values[1];
-                        Integer altitude = (Integer) record.values[2];
-                        Integer heartRate = (Integer) record.values[3];
-                        Integer cadence = (Integer) record.values[4];
-                        Integer speed = (Integer) record.values[5];
-                        Integer timestamp = (Integer) record.values[6];
+                        Integer lat = toInt(record.values[0]);
+                        Integer lon = toInt(record.values[1]);
+                        Integer altitude = toInt(record.values[2]);
+                        Integer heartRate = toInt(record.values[3]);
+                        Integer cadence = toInt(record.values[4]);
+                        Integer speed = toInt(record.values[5]);
+                        Integer timestamp = toInt(record.values[6]);
 
                         if (timestamp != null) {
                             localTimestamp = timestamp;
                             if (startTime == null) {
                                 startTime = LocalDateTime.ofInstant(
                                     Instant.ofEpochSecond(timestamp + FIT_EPOCH_OFFSET), ZoneId.systemDefault());
+                                firstTimestamp = timestamp;
                             }
                         }
 
@@ -164,8 +177,12 @@ public class FitParserService {
                             }
                         }
 
+                        LocalDateTime pointTime = startTime != null && firstTimestamp != null
+                            ? startTime.plusSeconds(localTimestamp - firstTimestamp)
+                            : LocalDateTime.now();
+
                         ActivityTrackpoint point = ActivityTrackpoint.builder()
-                            .timestamp(startTime != null ? startTime.plusSeconds(trackpoints.size()) : LocalDateTime.now())
+                            .timestamp(pointTime)
                             .latitude(lat != null ? latDeg : null)
                             .longitude(lon != null ? lonDeg : null)
                             .altitudeMeters(altMeters != NO_DATA_ALTITUDE ? altMeters : null)
@@ -187,7 +204,18 @@ public class FitParserService {
             }
         }
 
-        String rawId = startTime != null ? startTime.toString() : "fit_" + System.currentTimeMillis();
+        // Calcular totalTime desde el primer y último trackpoint
+        if (totalTime == 0.0 && trackpoints.size() >= 2) {
+            LocalDateTime firstTs = trackpoints.get(0).getTimestamp();
+            LocalDateTime lastTs = trackpoints.get(trackpoints.size() - 1).getTimestamp();
+            if (firstTs != null && lastTs != null) {
+                totalTime = java.time.Duration.between(firstTs, lastTs).getSeconds();
+            }
+        }
+
+        String rawId = startTime != null
+            ? startTime.toString().replace(":", "-").replace(".", "-")
+            : "fit_" + System.currentTimeMillis();
 
         Activity activity = Activity.builder()
             .id(rawId)
@@ -228,25 +256,58 @@ public class FitParserService {
     }
 
     private Object readField(ByteBuffer buffer, FieldDefinition field) {
+        int bytesNeeded = field.size;
+        
+        // Verificar que hay suficientes bytes disponibles
+        if (buffer.remaining() < bytesNeeded) {
+            return null;
+        }
+        
         int baseType = field.baseType & 0x1F;
         switch (baseType) {
-            case 0x00: return buffer.get() & 0xFF;
-            case 0x01: return buffer.get();
-            case 0x02: return buffer.getShort() & 0xFFFF;
-            case 0x03: return buffer.getInt();
-            case 0x04: return buffer.getFloat();
-            case 0x05: return buffer.getDouble();
-            case 0x06: {
+            case 0x00: return buffer.get() & 0xFF;                    // enum (1 byte)
+            case 0x01: return buffer.get();                           // sint8 (1 byte)
+            case 0x02: return buffer.get() & 0xFF;                    // uint8 (1 byte)
+            case 0x03: return buffer.getShort();                       // sint16 (2 bytes)
+            case 0x04: return buffer.getShort() & 0xFFFF;              // uint16 (2 bytes)
+            case 0x05: return buffer.getInt();                         // sint32 (4 bytes)
+            case 0x06: return buffer.getInt() & 0xFFFFFFFFL;           // uint32 (4 bytes)
+            case 0x07: {                                               // string (variable)
                 byte[] str = new byte[field.size];
                 buffer.get(str);
                 return new String(str).trim();
             }
+            case 0x08: return buffer.getFloat();                       // float32 (4 bytes)
+            case 0x09: return buffer.getDouble();                      // float64 (8 bytes)
+            case 0x0A: return buffer.get() & 0xFF;                    // uint8z (1 byte)
+            case 0x0B: return buffer.getShort() & 0xFFFF;              // uint16z (2 bytes)
+            case 0x0C: return buffer.getInt() & 0xFFFFFFFFL;           // uint32z (4 bytes)
+            case 0x0D: {                                               // byte (array)
+                byte[] bytes = new byte[field.size];
+                buffer.get(bytes);
+                return bytes;
+            }
+            case 0x0E: return buffer.getLong();                        // sint64 (8 bytes)
+            case 0x0F: return buffer.getLong();                        // uint64 (8 bytes)
+            case 0x13: return buffer.getLong();                        // uint64z (8 bytes)
+            case 0x14: return buffer.getLong();                        // sint64z (8 bytes)
             default: {
                 byte[] bytes = new byte[field.size];
                 buffer.get(bytes);
                 return bytes;
             }
         }
+    }
+
+    private Integer toInt(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number) {
+            long v = ((Number) value).longValue();
+            // FIT sentinel values indicating "no data"
+            if (v == 0xFFL || v == 0xFFFFL || v == 0xFFFFFFFFL) return null;
+            return (int) v;
+        }
+        return null;
     }
 
     private double calculateHaversineDistance(double lat1, double lon1, double lat2, double lon2) {

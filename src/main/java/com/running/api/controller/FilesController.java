@@ -29,16 +29,24 @@ public class FilesController {
 
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
     @Operation(summary = "Importar un archivo individual (TCX, GPX o FIT)", description = "Parsea e inserta la actividad en la BD y guarda el archivo físico de respaldo.")
-    public ResponseEntity<FileUploadResponseDto> uploadSingleFile(@RequestParam("file") MultipartFile file) throws Exception {
-        Activity activity = fileService.saveActivityFile(file);
-        FileUploadResponseDto response = FileUploadResponseDto.builder()
-                .message("Carrera importada y respaldada con éxito")
-                .activityId(activity.getId())
-                .backupPath(activity.getBackupFilePath())
-                .sourceFileType(activity.getSourceFileType())
-                .totalPoints(activity.getTrackpoints() != null ? activity.getTrackpoints().size() : 0)
-                .build();
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    public ResponseEntity<FileUploadResponseDto> uploadSingleFile(@RequestParam("file") MultipartFile file) {
+        try {
+            Activity activity = fileService.saveActivityFile(file);
+            FileUploadResponseDto response = FileUploadResponseDto.builder()
+                    .message("Carrera importada y respaldada con éxito")
+                    .activityId(activity.getId())
+                    .backupPath(activity.getBackupFilePath())
+                    .sourceFileType(activity.getSourceFileType())
+                    .totalPoints(activity.getTrackpoints() != null ? activity.getTrackpoints().size() : 0)
+                    .build();
+            return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        } catch (Exception e) {
+            e.printStackTrace();
+            FileUploadResponseDto errorResponse = FileUploadResponseDto.builder()
+                    .message("Error al procesar el archivo: " + e.getClass().getSimpleName() + ": " + e.getMessage())
+                    .build();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
+        }
     }
 
     @PostMapping(value = "/upload-bulk", consumes = "multipart/form-data")
