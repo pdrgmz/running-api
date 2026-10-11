@@ -76,7 +76,7 @@ public class FileService {
             Activity activity = parseFile(is, fileType);
             activity.setSourceFileType(fileType);
 
-            String backupPath = backupStorageService.store(file, activity.getId());
+            String backupPath = backupStorageService.store(file, activity.getId(), fileType != null ? fileType : "file");
             activity.setBackupFilePath(backupPath);
 
             return createActivity(activity);
@@ -89,7 +89,7 @@ public class FileService {
         Activity activity = parseFile(new ByteArrayInputStream(bytes), fileType);
         activity.setSourceFileType(fileType);
 
-        String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId());
+        String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId(), fileType);
         activity.setBackupFilePath(backupPath);
 
         return createActivity(activity);

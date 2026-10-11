@@ -30,18 +30,19 @@ public class BackupStorageService {
         }
     }
 
-    public String store(MultipartFile file, String activityId) {
+    public String store(MultipartFile file, String activityId, String fileType) {
         try (InputStream inputStream = file.getInputStream()) {
-            return store(inputStream, activityId);
+            return store(inputStream, activityId, fileType);
         } catch (IOException e) {
             throw new RuntimeException("Error guardando el archivo físico de respaldo", e);
         }
     }
 
-    public String store(InputStream inputStream, String activityId) {
+    public String store(InputStream inputStream, String activityId, String fileType) {
         try {
             String sanitizedId = UNSAFE_CHARS.matcher(activityId).replaceAll("-");
-            String filename = "backup_" + sanitizedId + ".tcx";
+            String extension = (fileType != null && !fileType.isEmpty()) ? fileType.toLowerCase() : "bin";
+            String filename = "backup_" + sanitizedId + "." + extension;
             Path destinationFile = this.rootLocation.resolve(filename).normalize().toAbsolutePath();
 
             if (!destinationFile.startsWith(this.rootLocation.normalize().toAbsolutePath())) {

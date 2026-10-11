@@ -174,7 +174,7 @@ spring:
 
 app:
   storage:
-    location: ./storage/tcx
+    location: ./storage/
   user:
     max-hr: 185
   elevation:

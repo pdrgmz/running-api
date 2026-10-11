@@ -117,3 +117,4 @@ activities.db
 .github/modernize/java-upgrade/hooks/scripts/recordToolUse.sh
 .github/modernize/java-upgrade/hooks/scripts/recordToolUse.ps1
 /target
+/storage
