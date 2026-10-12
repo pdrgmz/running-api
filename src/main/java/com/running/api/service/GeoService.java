@@ -7,6 +7,7 @@ import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +23,16 @@ public class GeoService {
 
     private final ActivityRepository activityRepository;
     private final ActivityTrackpointRepository trackpointRepository;
+
+    @Async("taskExecutor")
+    public CompletableFuture<GeoJsonDto> exportGeoJsonAsync(String activityId) {
+        return CompletableFuture.completedFuture(exportGeoJson(activityId));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<String> exportGpxAsync(String activityId) {
+        return CompletableFuture.completedFuture(exportGpx(activityId));
+    }
 
     @Transactional(readOnly = true)
     public GeoJsonDto exportGeoJson(String activityId) {

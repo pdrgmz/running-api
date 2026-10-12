@@ -2,11 +2,14 @@ package com.running.api.service;
 
 import com.running.api.dto.FitActivityDTO;
 import com.garmin.fit.Decode;
+import com.garmin.fit.Mesg;
 import com.garmin.fit.MesgBroadcaster;
+import com.garmin.fit.MesgListener;
 import com.garmin.fit.RecordMesgListener;
 import com.garmin.fit.SessionMesgListener;
 import com.garmin.fit.DateTime;
 import com.garmin.fit.FitRuntimeException;
+import com.garmin.fit.SessionMesg;
 import com.running.api.model.Activity;
 import com.running.api.mapper.ActivityMapper;
 import org.springframework.stereotype.Service;
@@ -159,6 +162,38 @@ public class FitParserService {
                 .toInstant()
                 .atZone(ZoneOffset.UTC)
                 .toLocalDateTime();
+    }
+
+    /**
+     * Detecta si la actividad es una carrera basándose en el campo sport del SessionMesg.
+     * @return true si es running, false si es otro deporte (cycling, swimming, etc.)
+     */
+    public static boolean isRunningActivity(InputStream inputStream) {
+        try {
+            Decode decode = new Decode();
+            SportDetectorListener listener = new SportDetectorListener();
+            decode.read(inputStream, listener);
+            
+            System.out.println(".fit Type: " + listener.sport + " ="+ listener.isRunning());
+            return listener.isRunning();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static class SportDetectorListener implements MesgListener {
+        private String sport;
+
+        @Override
+        public void onMesg(Mesg mesg) {
+            if (mesg instanceof SessionMesg sessionMesg) {
+                sport = sessionMesg.getSport() != null ? sessionMesg.getSport().name().toLowerCase() : null;
+            }
+        }
+
+        boolean isRunning() {
+            return "running".equals(sport) || "trail_running".equals(sport);
+        }
     }
 
     /**

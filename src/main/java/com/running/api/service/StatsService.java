@@ -12,6 +12,7 @@ import com.running.api.repository.GlobalSummaryStatsRepository;
 import com.running.api.repository.PersonalRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -41,6 +43,28 @@ public class StatsService {
         put("21k", 21097.5);
         put("42k", 42195.0);
     }};
+
+    @Async("taskExecutor")
+    public CompletableFuture<SummaryStatsDto> getSummaryAsync(String period, Integer year) {
+        return CompletableFuture.completedFuture(getSummary(period, year));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<List<RecordResponseDto>> getPersonalRecordsAsync() {
+        return CompletableFuture.completedFuture(getPersonalRecords());
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<Void> recalculatePersonalRecordsAsync() {
+        recalculatePersonalRecords();
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<Void> recalculateStatsAndRecordsAsync() {
+        recalculateStatsAndRecords();
+        return CompletableFuture.completedFuture(null);
+    }
 
     @Transactional(readOnly = true)
     public SummaryStatsDto getSummary(String period, Integer year) {
@@ -307,12 +331,21 @@ public class StatsService {
             }
 
             if (bestRecordForCategory != null) {
-                calculatedRecords.add(bestRecordForCategory);
+                // Upsert: buscar por categoría y actualizar o crear
+                Optional<PersonalRecord> existingOpt = personalRecordRepository.findByDistanceCategory(category);
+                if (existingOpt.isPresent()) {
+                    PersonalRecord existing = existingOpt.get();
+                    existing.setBestTimeSeconds(bestRecordForCategory.getBestTimeSeconds());
+                    existing.setActivityId(bestRecordForCategory.getActivityId());
+                    existing.setActivityDate(bestRecordForCategory.getActivityDate());
+                    existing.setAvgSpeed(bestRecordForCategory.getAvgSpeed());
+                    existing.setAvgPaceMinPerKm(bestRecordForCategory.getAvgPaceMinPerKm());
+                    existing.setTargetDistanceMeters(bestRecordForCategory.getTargetDistanceMeters());
+                    calculatedRecords.add(personalRecordRepository.save(existing));
+                } else {
+                    calculatedRecords.add(personalRecordRepository.save(bestRecordForCategory));
+                }
             }
-        }
-
-        if (!calculatedRecords.isEmpty()) {
-            personalRecordRepository.saveAll(calculatedRecords);
         }
 
         return calculatedRecords;
@@ -327,13 +360,13 @@ public class StatsService {
         }
         summaryStatsRepository.save(newStats);
 
-        personalRecordRepository.deleteAll();
+        // No es necesario deleteAll() — recalculateAllPersonalRecords() hace upsert por categoría
         recalculateAllPersonalRecords();
     }
 
     @Transactional
     public void recalculatePersonalRecords() {
-        personalRecordRepository.deleteAll();
+        // No es necesario deleteAll() — recalculateAllPersonalRecords() hace upsert por categoría
         recalculateAllPersonalRecords();
     }
 }

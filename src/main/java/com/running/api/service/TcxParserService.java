@@ -212,6 +212,23 @@ public class TcxParserService {
         return EARTH_RADIUS_METERS * c;
     }
 
+    /**
+     * Detecta si la actividad es una carrera basándose en el atributo Sport del elemento Activity.
+     * @return true si es Running, false si es otro deporte (Biking, Swimming, etc.)
+     */
+    public static boolean isRunningActivity(InputStream inputStream) {
+        try {
+            JsonNode root = new XmlMapper().readTree(inputStream);
+            JsonNode activityNode = root.path("Activities").path("Activity");
+            if (activityNode.isMissingNode()) return false;
+            String sport = activityNode.path("Sport").asText("").toLowerCase();
+            System.out.println(".txc Type: " + sport + " =" + (sport.contains("running") || sport.contains("run")));
+            return sport.contains("running") || sport.contains("run");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private double extractAltitude(JsonNode tp) {
         JsonNode node = tp.path("AltitudeMeters");
         if (node.isMissingNode()) node = tp.path("Position").path("AltitudeMeters");

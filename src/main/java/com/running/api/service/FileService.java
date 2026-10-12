@@ -9,6 +9,7 @@ import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -19,6 +20,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -67,6 +69,21 @@ public class FileService {
         summaryStatsRepository.save(newStats);
     }
 
+    @Async("taskExecutor")
+    public CompletableFuture<Activity> saveActivityFileAsync(MultipartFile file) throws Exception {
+        return CompletableFuture.completedFuture(saveActivityFile(file));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<Activity> saveActivityInputStreamAsync(InputStream is, String fileType) throws Exception {
+        return CompletableFuture.completedFuture(saveActivityInputStream(is, fileType));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<BulkFileUploadResponseDto> saveBulkFilesAsync(MultipartFile file) {
+        return CompletableFuture.completedFuture(saveBulkFiles(file));
+    }
+
     @Transactional
     public Activity saveActivityFile(MultipartFile file) throws Exception {
         String filename = file.getOriginalFilename() != null ? file.getOriginalFilename().toLowerCase() : "";
@@ -96,11 +113,42 @@ public class FileService {
     }
 
     private Activity parseFile(InputStream is, String fileType) throws Exception {
+        // Leer bytes una vez para permitir múltiples lecturas
+        byte[] bytes = is.readAllBytes();
+
+        // Verificar que sea una carrera antes de parsear completamente
+        if (!isRunningActivity(new ByteArrayInputStream(bytes), fileType)) {
+            throw new IllegalArgumentException("La actividad no es una carrera (running). Solo se importan actividades de carrera.");
+        }
+
+        // Usar un nuevo stream para el parser
+        InputStream parseStream = new ByteArrayInputStream(bytes);
         return switch (fileType) {
-            case "tcx" -> tcxParserService.parse(is);
-            case "gpx" -> gpxParserService.parse(is);
-            case "fit" -> fitParserService.parse(is);
+            case "tcx" -> tcxParserService.parse(parseStream);
+            case "gpx" -> gpxParserService.parse(parseStream);
+            case "fit" -> fitParserService.parse(parseStream);
             default -> throw new IllegalArgumentException("Tipo de archivo no soportado: " + fileType);
+        };
+    }
+
+    /**
+     * Detecta si la actividad es una carrera según el tipo de archivo.
+     */
+    private boolean isRunningActivity(InputStream is, String fileType) {
+        return switch (fileType) {
+            case "tcx" -> {
+                try { yield TcxParserService.isRunningActivity(is); }
+                catch (Exception e) { yield false; }
+            }
+            case "gpx" -> {
+                try { yield GpxParserService.isRunningActivity(is); }
+                catch (Exception e) { yield false; }
+            }
+            case "fit" -> {
+                try { yield FitParserService.isRunningActivity(is); }
+                catch (Exception e) { yield false; }
+            }
+            default -> false;
         };
     }
 

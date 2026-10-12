@@ -210,6 +210,27 @@ public class GpxParserService {
         return activity;
     }
 
+    /**
+     * Detecta si la actividad es una carrera basándose en el elemento <type> dentro de <trk>.
+     * @return true si es running, false si es otro deporte (cycling, walking, etc.)
+     */
+    public static boolean isRunningActivity(InputStream inputStream) {
+        try {
+            JsonNode root = new XmlMapper().readTree(inputStream);
+            JsonNode gpxNode = findGpxRoot(root);
+            if (gpxNode == null) return false;
+            JsonNode trk = findChild(gpxNode, "trk");
+            if (trk == null) return false;
+            JsonNode typeNode = findChild(trk, "type");
+            if (typeNode == null) return false;
+            String type = typeNode.asText("").toLowerCase();
+            System.out.println(".gpx Type: " + type +" =" + (type.contains("running") || type.contains("run") || type.contains("carrera")));
+            return type.contains("running") || type.contains("run") || type.contains("carrera");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private JsonNode findFirstChild(JsonNode parent) {
         if (parent == null || !parent.isObject()) return null;
         Iterator<String> it = parent.fieldNames();
@@ -219,7 +240,7 @@ public class GpxParserService {
         return null;
     }
 
-    private JsonNode findChild(JsonNode parent, String name) {
+    private static JsonNode findChild(JsonNode parent, String name) {
         if (parent == null || !parent.isObject()) return null;
         Iterator<String> it = parent.fieldNames();
         while (it.hasNext()) {
@@ -231,7 +252,7 @@ public class GpxParserService {
         return null;
     }
 
-    private JsonNode findGpxRoot(JsonNode root) {
+    private static JsonNode findGpxRoot(JsonNode root) {
         if (root == null || !root.isObject()) return null;
 
         // Caso 1: root tiene "gpx" como campo

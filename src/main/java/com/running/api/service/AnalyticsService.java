@@ -18,12 +18,14 @@ import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.projection.DailyTrimpProjection;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Service
@@ -49,6 +51,46 @@ public class AnalyticsService {
     private Integer defaultMaxHr;
 
     // 1. Splits por Kilómetro
+    @Async("taskExecutor")
+    public CompletableFuture<List<SplitDto>> calculateSplitsAsync(String activityId) {
+        return CompletableFuture.completedFuture(calculateSplits(activityId));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<HrZonesResponseDto> calculateHrZonesAsync(String activityId) {
+        return CompletableFuture.completedFuture(calculateHrZones(activityId));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<CardiacDriftResponseDto> calculateCardiacDriftAsync(String activityId) {
+        return CompletableFuture.completedFuture(calculateCardiacDrift(activityId));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<TrainingLoadResponseDto> calculateTrainingLoadAsync(String activityId) {
+        return CompletableFuture.completedFuture(calculateTrainingLoad(activityId));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<Vo2MaxVamResponseDto> calculateVo2MaxAndVamAsync(String activityId) {
+        return CompletableFuture.completedFuture(calculateVo2MaxAndVam(activityId));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<List<PmcPointDto>> calculatePmcHistoryAsync(LocalDate startDate, LocalDate endDate) {
+        return CompletableFuture.completedFuture(calculatePmcHistory(startDate, endDate));
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<EddingtonStatsDto> calculateEddingtonNumberAsync() {
+        return CompletableFuture.completedFuture(calculateEddingtonNumber());
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<AcwrStatusDto> calculateCurrentAcwrAsync() {
+        return CompletableFuture.completedFuture(calculateCurrentAcwr());
+    }
+
     public List<SplitDto> calculateSplits(String activityId) {
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));

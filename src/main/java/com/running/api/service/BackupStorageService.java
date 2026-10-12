@@ -2,6 +2,7 @@ package com.running.api.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -11,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -28,6 +30,11 @@ public class BackupStorageService {
         } catch (IOException e) {
             throw new RuntimeException("Error al crear el directorio de respaldo físico", e);
         }
+    }
+
+    @Async("taskExecutor")
+    public CompletableFuture<String> storeAsync(InputStream inputStream, String activityId, String fileType) {
+        return CompletableFuture.completedFuture(store(inputStream, activityId, fileType));
     }
 
     public String store(MultipartFile file, String activityId, String fileType) {
