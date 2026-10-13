@@ -222,7 +222,6 @@ public class TcxParserService {
             JsonNode activityNode = root.path("Activities").path("Activity");
             if (activityNode.isMissingNode()) return false;
             String sport = activityNode.path("Sport").asText("").toLowerCase();
-            System.out.println(".txc Type: " + sport + " =" + (sport.contains("running") || sport.contains("run")));
             return sport.contains("running") || sport.contains("run");
         } catch (Exception e) {
             return false;

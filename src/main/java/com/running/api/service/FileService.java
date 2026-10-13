@@ -7,11 +7,16 @@ import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
@@ -21,10 +26,12 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class FileService {
@@ -42,6 +49,11 @@ public class FileService {
     private final GlobalSummaryStatsRepository summaryStatsRepository;
     private final ActivityTrackpointRepository trackpointRepository;
     private final StatsService statsService;
+    private final BulkUploadStatusTracker bulkUploadStatusTracker;
+    private final PlatformTransactionManager transactionManager;
+
+    @Qualifier("zipExecutor")
+    private final Executor zipExecutor;
 
     @Transactional
     public Activity createActivity(Activity activity) {
@@ -84,6 +96,23 @@ public class FileService {
         return CompletableFuture.completedFuture(saveBulkFiles(file));
     }
 
+    @Async("taskExecutor")
+    public void processBulkUploadAsync(byte[] zipBytes, String filename, String uploadId) {
+        try {
+            log.info("[{}] Iniciando carga de {} archivos desde {}", uploadId, filename, zipBytes.length);
+            int total = countValidFiles(zipBytes);
+            bulkUploadStatusTracker.setTotalFiles(uploadId, total);
+            log.info("[{}] Se encontraron {} archivos válidos en el ZIP", uploadId, total);
+            processZipFile(zipBytes, filename, uploadId);
+            bulkUploadStatusTracker.setStatus(uploadId, "COMPLETED");
+            log.info("[{}] Carga completada", uploadId);
+        } catch (Exception e) {
+            bulkUploadStatusTracker.setStatus(uploadId, "FAILED");
+            bulkUploadStatusTracker.addError(uploadId, filename, e.getMessage());
+            log.error("[{}] Carga fallida: {}", uploadId, e.getMessage());
+        }
+    }
+
     @Transactional
     public Activity saveActivityFile(MultipartFile file) throws Exception {
         String filename = file.getOriginalFilename() != null ? file.getOriginalFilename().toLowerCase() : "";
@@ -112,16 +141,28 @@ public class FileService {
         return createActivity(activity);
     }
 
+    /**
+     * Guarda una actividad sin recalcular estadísticas ni records personales.
+     * Usado en la importación masiva en paralelo donde los stats se calculan al final.
+     */
+    private void saveActivityWithoutStats(InputStream is, String fileType) throws Exception {
+        byte[] bytes = is.readAllBytes();
+        Activity activity = parseFile(new ByteArrayInputStream(bytes), fileType);
+        activity.setSourceFileType(fileType);
+
+        String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId(), fileType);
+        activity.setBackupFilePath(backupPath);
+
+        activityRepository.save(activity);
+    }
+
     private Activity parseFile(InputStream is, String fileType) throws Exception {
-        // Leer bytes una vez para permitir múltiples lecturas
         byte[] bytes = is.readAllBytes();
 
-        // Verificar que sea una carrera antes de parsear completamente
         if (!isRunningActivity(new ByteArrayInputStream(bytes), fileType)) {
             throw new IllegalArgumentException("La actividad no es una carrera (running). Solo se importan actividades de carrera.");
         }
 
-        // Usar un nuevo stream para el parser
         InputStream parseStream = new ByteArrayInputStream(bytes);
         return switch (fileType) {
             case "tcx" -> tcxParserService.parse(parseStream);
@@ -131,9 +172,6 @@ public class FileService {
         };
     }
 
-    /**
-     * Detecta si la actividad es una carrera según el tipo de archivo.
-     */
     private boolean isRunningActivity(InputStream is, String fileType) {
         return switch (fileType) {
             case "tcx" -> {
@@ -158,6 +196,102 @@ public class FileService {
         if (filename.endsWith(FIT_EXTENSION)) return "fit";
         throw new IllegalArgumentException("Extensión de archivo no soportada: " + filename);
     }
+
+    private int countValidFiles(byte[] zipBytes) throws Exception {
+        int count = 0;
+        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) continue;
+                String lowerName = entry.getName().toLowerCase();
+                if (lowerName.endsWith(TCX_EXTENSION) || lowerName.endsWith(GPX_EXTENSION) || lowerName.endsWith(FIT_EXTENSION)) {
+                    count++;
+                }
+                zis.closeEntry();
+            }
+        }
+        return count;
+    }
+
+    private void processZipFile(byte[] zipBytes, String filename, String uploadId) {
+        // 1. Leer todos los entries del ZIP primero (secuencial - ZipInputStream no es thread-safe)
+        List<ZipFileData> filesToProcess = new ArrayList<>();
+        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    zis.closeEntry();
+                    continue;
+                }
+                String entryName = entry.getName();
+                String lowerName = entryName.toLowerCase();
+
+                if (lowerName.endsWith(TCX_EXTENSION) || lowerName.endsWith(GPX_EXTENSION) || lowerName.endsWith(FIT_EXTENSION)) {
+                    try {
+                        byte[] entryData = zis.readAllBytes();
+                        String fileType = detectFileType(entryName);
+                        filesToProcess.add(new ZipFileData(entryName, fileType, entryData));
+                    } catch (Exception e) {
+                        bulkUploadStatusTracker.incrementProcessed(uploadId, false);
+                        bulkUploadStatusTracker.addError(uploadId, entryName, e.getMessage());
+                    }
+                }
+                zis.closeEntry();
+            }
+        } catch (Exception e) {
+            bulkUploadStatusTracker.setStatus(uploadId, "FAILED");
+            bulkUploadStatusTracker.addError(uploadId, filename, e.getMessage());
+            return;
+        }
+
+        // 2. Procesar archivos en paralelo (sin recalcular stats por archivo)
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (ZipFileData fileData : filesToProcess) {
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                try {
+                    log.debug("[{}] [{}] Procesando archivo: {} ({} bytes)", 
+                            uploadId, Thread.currentThread().getName(), fileData.fileName, fileData.data.length);
+                    TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
+                    txTemplate.execute(status -> {
+                        try {
+                            saveActivityWithoutStats(new ByteArrayInputStream(fileData.data), fileData.fileType);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e.getMessage(), e);
+                        }
+                        return null;
+                    });
+                    log.debug("[{}] [{}] Archivo exitoso: {}", 
+                            uploadId, Thread.currentThread().getName(), fileData.fileName);
+                    bulkUploadStatusTracker.incrementProcessed(uploadId, true);
+                } catch (Exception ex) {
+                    String msg = ex.getCause() != null && ex.getCause().getMessage() != null
+                            ? ex.getCause().getMessage()
+                            : ex.getMessage();
+                    log.warn("[{}] [{}] Error en archivo {}: {}", 
+                            uploadId, Thread.currentThread().getName(), fileData.fileName, msg);
+                    bulkUploadStatusTracker.incrementProcessed(uploadId, false);
+                    bulkUploadStatusTracker.addError(uploadId, fileData.fileName, msg);
+                }
+            }, zipExecutor);
+            futures.add(future);
+        }
+
+        // Esperar a que todos terminen
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+        // 3. Recalcular estadísticas y records personales UNA SOLA VEZ al final
+        log.info("[{}] Recalculando estadísticas finales...", uploadId);
+        try {
+            recalculateAllStats();
+            statsService.recalculateAllPersonalRecords();
+            log.info("[{}] Estadísticas y records recalculados", uploadId);
+        } catch (Exception e) {
+            bulkUploadStatusTracker.addError(uploadId, "final-stats", "Error al recalcular estadísticas finales: " + e.getMessage());
+            log.error("[{}] Error al recalcular estadísticas: {}", uploadId, e.getMessage());
+        }
+    }
+
+    private record ZipFileData(String fileName, String fileType, byte[] data) {}
 
     @Transactional
     public BulkFileUploadResponseDto saveBulkFiles(MultipartFile file) {
