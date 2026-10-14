@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,5 +35,13 @@ public class StatsController {
     @Operation(summary = "Obtener mejores marcas personales (Personal Bests)", description = "Récords para 1k, 5k, 10k, 15k, 21k y 42k calculados con ventana móvil de telemetría.")
     public ResponseEntity<List<RecordResponseDto>> getRecords() {
         return ResponseEntity.ok(statsService.getPersonalRecords());
+    }
+
+    @PostMapping("/recalculate")
+    @Operation(summary = "Recalcular desde 0 las estadísticas globales y los records personales",
+               description = "Recalcula todas las estadísticas acumuladas (total actividades, distancia, tiempo, elevación, calorías) y todos los records personales (1k, 5k, 10k, 15k, 21k, 42k) desde cero basándose en todas las actividades existentes.")
+    public ResponseEntity<String> recalculate() {
+        statsService.recalculateStatsAndRecords();
+        return ResponseEntity.ok("Estadísticas y records recalculados exitosamente");
     }
 }

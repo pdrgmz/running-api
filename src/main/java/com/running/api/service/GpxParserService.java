@@ -224,7 +224,6 @@ public class GpxParserService {
             JsonNode typeNode = findChild(trk, "type");
             if (typeNode == null) return false;
             String type = typeNode.asText("").toLowerCase();
-            System.out.println(".gpx Type: " + type +" =" + (type.contains("running") || type.contains("run") || type.contains("carrera")));
             return type.contains("running") || type.contains("run") || type.contains("carrera");
         } catch (Exception e) {
             return false;

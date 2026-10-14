@@ -159,7 +159,8 @@ public class FileService {
     private Activity parseFile(InputStream is, String fileType) throws Exception {
         byte[] bytes = is.readAllBytes();
 
-        if (!isRunningActivity(new ByteArrayInputStream(bytes), fileType)) {
+        // TCX y GPX validan previamente; FIT valida internamente en fitParserService.parse()
+        if (!"fit".equals(fileType) && !isRunningActivity(new ByteArrayInputStream(bytes), fileType)) {
             throw new IllegalArgumentException("La actividad no es una carrera (running). Solo se importan actividades de carrera.");
         }
 
