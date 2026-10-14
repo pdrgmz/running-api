@@ -8,6 +8,7 @@ import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
 import com.running.api.repository.PersonalRecordRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Async;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ActivityService {
@@ -60,6 +62,7 @@ public class ActivityService {
 
     @Transactional(readOnly = true)
     public Optional<Activity> getActivityById(String id) {
+        log.debug("[ACTIVITY] Buscando actividad por ID: {}", id);
         return activityRepository.findById(id);
     }
 
@@ -110,6 +113,7 @@ public class ActivityService {
     @Transactional
     public int deleteAllActivities() {
         long count = activityRepository.count();
+        log.warn("[ACTIVITY] Eliminando TODAS las actividades. Total a eliminar: {}", count);
 
         trackpointRepository.deleteAll();
         activityRepository.deleteAll();
@@ -131,13 +135,16 @@ public class ActivityService {
             backupStorageService.clearStorage();
         }
 
+        log.info("[ACTIVITY] Base de datos vaciada. {} actividades eliminadas", count);
         return (int) count;
     }
 
     @Transactional
     public boolean deleteActivityById(String id) {
+        log.info("[ACTIVITY] Eliminando actividad: {}", id);
         Optional<Activity> activityOpt = activityRepository.findById(id);
         if (activityOpt.isEmpty()) {
+            log.warn("[ACTIVITY] Actividad no encontrada para eliminar: {}", id);
             return false;
         }
 
@@ -146,8 +153,10 @@ public class ActivityService {
         if (activity.getBackupFilePath() != null) {
             try {
                 Files.deleteIfExists(Path.of(activity.getBackupFilePath()));
-            } catch (Exception ignored) {
-                // Archivo de respaldo ya no existe o no se puede eliminar
+                log.debug("[ACTIVITY] Archivo de respaldo eliminado: {}", activity.getBackupFilePath());
+            } catch (Exception e) {
+                log.warn("[ACTIVITY] No se pudo eliminar el archivo de respaldo {}: {}",
+                        activity.getBackupFilePath(), e.getMessage());
             }
         }
 
@@ -155,6 +164,7 @@ public class ActivityService {
         fileService.recalculateAllStats();
         statsService.recalculatePersonalRecords();
 
+        log.info("[ACTIVITY] Actividad eliminada exitosamente: {}", id);
         return true;
     }
 }

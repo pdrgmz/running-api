@@ -6,6 +6,7 @@ import com.fasterxml.jackson.dataformat.xml.deser.FromXmlParser;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
@@ -15,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class GpxParserService {
@@ -30,6 +32,7 @@ public class GpxParserService {
     private final AnalyticsService analyticsService;
 
     public Activity parse(InputStream inputStream) throws Exception {
+        log.debug("[GPX] Iniciando parseo de archivo GPX");
         xmlMapper.configure(FromXmlParser.Feature.EMPTY_ELEMENT_AS_NULL, false);
 
         JsonNode root = xmlMapper.readTree(inputStream);
@@ -38,6 +41,7 @@ public class GpxParserService {
         // Buscar el nodo que contiene trackpoints o metadata
         JsonNode gpxNode = findGpxRoot(root);
         if (gpxNode == null) {
+            log.error("[GPX] Estructura de archivo GPX no válida: Falta la etiqueta <gpx>");
             throw new IllegalArgumentException("Estructura de archivo GPX no válida: Falta la etiqueta <gpx>.");
         }
 
@@ -52,13 +56,16 @@ public class GpxParserService {
         }
         if (rawId == null || rawId.isEmpty()) {
             rawId = "gpx_" + System.currentTimeMillis();
+            log.debug("[GPX] ID no encontrado en metadata, usando timestamp: {}", rawId);
         }
         LocalDateTime startTime;
         try {
             startTime = ZonedDateTime.parse(rawId).toLocalDateTime();
         } catch (Exception e) {
+            log.warn("[GPX] No se pudo parsear la fecha '{}', usando fecha actual", rawId);
             startTime = LocalDateTime.now();
         }
+        log.debug("[GPX] Parseando actividad con ID: {}", rawId);
 
         double totalDistance = 0.0;
         double totalTime = 0.0;
@@ -207,6 +214,9 @@ public class GpxParserService {
             analyticsService.populateMetrics(activity);
         }
 
+        log.info("[GPX] Actividad parseada exitosamente: ID={}, Trackpoints={}, Distancia={}m, Tiempo={}s",
+                activity.getId(), activity.getTrackpoints().size(),
+                activity.getDistanceMeters(), activity.getTotalTimeSeconds());
         return activity;
     }
 

@@ -1,5 +1,6 @@
 package com.running.api.controller;
 
+import com.running.api.metrics.MetricsService;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.service.ActivityService;
@@ -28,6 +29,7 @@ import java.util.Map;
 public class ActivityController {
 
     private final ActivityService activityService;
+    private final MetricsService metricsService;
 
     @GetMapping
     @Operation(summary = "Listar todas las carreras registradas (paginado y ordenado)")
@@ -60,6 +62,7 @@ public class ActivityController {
     @Operation(summary = "Vaciar toda la base de datos", description = "Elimina todas las carreras, trackpoints, récords personales y reinicia las estadísticas globales.")
     public ResponseEntity<Map<String, Object>> deleteAllActivities() {
         int count = activityService.deleteAllActivities();
+        metricsService.recordActivityDeleted();
         return ResponseEntity.ok(Map.of(
                 "message", "Base de datos y estadísticas vaciadas con éxito",
                 "deletedActivities", count

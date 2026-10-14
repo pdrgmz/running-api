@@ -2,6 +2,7 @@ package com.running.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.running.api.dto.BulkFileUploadResponseDto;
+import com.running.api.metrics.MetricsService;
 import com.running.api.model.Activity;
 import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.ActivityRepository;
@@ -51,6 +52,7 @@ public class FileService {
     private final StatsService statsService;
     private final BulkUploadStatusTracker bulkUploadStatusTracker;
     private final PlatformTransactionManager transactionManager;
+    private final MetricsService metricsService;
 
     @Qualifier("zipExecutor")
     private final Executor zipExecutor;
@@ -98,6 +100,7 @@ public class FileService {
 
     @Async("taskExecutor")
     public void processBulkUploadAsync(byte[] zipBytes, String filename, String uploadId) {
+        long startTime = System.currentTimeMillis();
         try {
             log.info("[{}] Iniciando carga de {} archivos desde {}", uploadId, filename, zipBytes.length);
             int total = countValidFiles(zipBytes);
@@ -105,7 +108,9 @@ public class FileService {
             log.info("[{}] Se encontraron {} archivos válidos en el ZIP", uploadId, total);
             processZipFile(zipBytes, filename, uploadId);
             bulkUploadStatusTracker.setStatus(uploadId, "COMPLETED");
-            log.info("[{}] Carga completada", uploadId);
+            long duration = System.currentTimeMillis() - startTime;
+            metricsService.recordBulkUpload(total, total, 0);
+            log.info("[{}] Carga completada en {}ms", uploadId, duration);
         } catch (Exception e) {
             bulkUploadStatusTracker.setStatus(uploadId, "FAILED");
             bulkUploadStatusTracker.addError(uploadId, filename, e.getMessage());
@@ -117,6 +122,7 @@ public class FileService {
     public Activity saveActivityFile(MultipartFile file) throws Exception {
         String filename = file.getOriginalFilename() != null ? file.getOriginalFilename().toLowerCase() : "";
         String fileType = detectFileType(filename);
+        long startTime = System.currentTimeMillis();
 
         try (InputStream is = file.getInputStream()) {
             Activity activity = parseFile(is, fileType);
@@ -125,7 +131,16 @@ public class FileService {
             String backupPath = backupStorageService.store(file, activity.getId(), fileType != null ? fileType : "file");
             activity.setBackupFilePath(backupPath);
 
-            return createActivity(activity);
+            Activity saved = createActivity(activity);
+            long duration = System.currentTimeMillis() - startTime;
+            metricsService.recordFileUpload(fileType, true);
+            metricsService.recordParseTime(fileType, duration);
+            metricsService.recordActivityCreated(fileType);
+            return saved;
+        } catch (Exception e) {
+            metricsService.recordFileUpload(fileType, false);
+            metricsService.recordParseError(fileType, e.getClass().getSimpleName());
+            throw e;
         }
     }
 
