@@ -23,10 +23,10 @@
 
 | Capa | Tecnología |
 |------|-----------|
-| **Lenguaje** | Java 17 |
+| **Lenguaje** | Java 21 |
 | **Framework** | Spring Boot 3.2.3 |
 | **ORM** | Spring Data JPA + Hibernate |
-| **Base de datos** | SQLite (JDBC + Hibernate Community Dialects) |
+| **Base de datos** | PostgreSQL 16 |
 | **Parser XML** | Jackson XML (`jackson-dataformat-xml`) |
 | **Documentación API** | OpenAPI 3 / Swagger UI (springdoc 2.3.0) |
 | **Utilidades** | Lombok |
@@ -77,23 +77,25 @@
 ```
 src/main/java/com/running/api/
 ├── config/
+│   ├── AsyncConfig.java         # Executors @Async (taskExecutor, zipExecutor)
 │   ├── CorsConfig.java          # Configuración CORS
 │   └── OpenApiConfig.java       # Configuración OpenAPI/Swagger
 ├── controller/
 │   ├── ActivityController.java  # CRUD de actividades
 │   ├── AnalyticsController.java # Métricas avanzadas
-│   ├── FilesController.java     # Importación/exportación TCX
+│   ├── FilesController.java     # Importación/exportación TCX/GPX/FIT
 │   ├── GeoController.java       # Exportación GeoJSON/GPX
-│   └── StatsController.java      # Estadísticas y récords
+│   └── StatsController.java     # Estadísticas y récords
 ├── dto/
 │   ├── AcwrStatusDto.java
-│   ├── ActivityResponseDto.java
-│   ├── BulkFileUploadResponseDto.java
+│   ├── BulkUploadStatusDto.java
 │   ├── CardiacDriftResponseDto.java
 │   ├── DaytimeStatsDto.java
 │   ├── EddingtonStatsDto.java
 │   ├── ErrorResponseDto.java
+│   ├── FileErrorDto.java
 │   ├── FileUploadResponseDto.java
+│   ├── FitActivityDTO.java
 │   ├── GeoJsonDto.java
 │   ├── HrZoneDetailDto.java
 │   ├── HrZonesMapDto.java
@@ -110,11 +112,19 @@ src/main/java/com/running/api/
 ├── exception/
 │   ├── GlobalExceptionHandler.java
 │   └── ResourceNotFoundException.java
+├── mapper/
+│   └── ActivityMapper.java      # Mapeo FitActivityDTO -> Activity
+├── mcp/
+│   ├── McpServerController.java # Servidor MCP (JSON-RPC)
+│   └── tools/
+│       ├── ActivityTools.java
+│       ├── AnalyticsTools.java
+│       └── StatsTools.java
 ├── model/
 │   ├── Activity.java            # Entidad principal de carrera
-│   ├── ActivityTrackpoint.java   # Puntos de telemetría segundo a segundo
+│   ├── ActivityTrackpoint.java  # Puntos de telemetría segundo a segundo
 │   ├── GlobalSummaryStats.java  # Estadísticas globales acumuladas
-│   └── PersonalRecord.java        # Récords personales por distancia
+│   └── PersonalRecord.java      # Récords personales por distancia
 ├── repository/
 │   ├── ActivityRepository.java
 │   ├── ActivityTrackpointRepository.java
@@ -126,6 +136,7 @@ src/main/java/com/running/api/
 │   ├── ActivityService.java
 │   ├── AnalyticsService.java
 │   ├── BackupStorageService.java
+│   ├── BulkUploadStatusTracker.java
 │   ├── FileService.java
 │   ├── FitParserService.java
 │   ├── GeoService.java
@@ -144,9 +155,10 @@ src/main/java/com/running/api/
 | Variable | Valor por defecto | Descripción |
 |----------|-------------------|-------------|
 | `APP_PORT` | `8080` | Puerto expuesto en el host |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173,...` | Orígenes permitidos para CORS |
-| `SPRING_DATASOURCE_URL` | `jdbc:sqlite:activities.db?journal_mode=WAL&synchronous=NORMAL` | URL de conexión a SQLite |
-| `APP_STORAGE_LOCATION` | `./storage/tcx` | Ruta de respaldo de archivos TCX |
+| `APP_CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173,...` | Orígenes permitidos para CORS |
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5433/running_api` | URL de conexión a PostgreSQL |
+| `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | `runninging` | Credenciales de PostgreSQL |
+| `APP_STORAGE_LOCATION` | `./storage` | Ruta de respaldo de archivos de actividad |
 | `APP_USER_MAX_HR` | `185` | Frecuencia cardíaca máxima para zonas FC |
 | `APP_ELEVATION_MIN_THRESHOLD_METERS` | `0.1` | Umbral de histéresis para filtrar ruido GPS |
 
@@ -159,14 +171,16 @@ server:
 
 spring:
   datasource:
-    url: jdbc:sqlite:activities.db?journal_mode=WAL&synchronous=NORMAL
-    driver-class-name: org.sqlite.JDBC
+    url: jdbc:postgresql://localhost:5433/running_api
+    username: runninging
+    password: runninging
+    driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 1
+      maximum-pool-size: 20
   jpa:
-    database-platform: org.hibernate.community.dialect.SQLiteDialect
     hibernate:
       ddl-auto: update
+    show-sql: false
   servlet:
     multipart:
       max-file-size: 50MB
@@ -174,11 +188,15 @@ spring:
 
 app:
   storage:
-    location: ./storage/
+    location: ./storage
   user:
     max-hr: 185
   elevation:
     min-threshold-meters: 0.1
+  cors:
+    allowed-origins: http://localhost:3000,http://localhost:5173
+  openapi:
+    server-url: https://running-api.pdrgmz.uk
 ```
 
 ---
@@ -206,8 +224,8 @@ docker-compose down
 
 | Volumen | Contenido |
 |---------|-----------|
-| `running_api_data` | Base de datos SQLite (`activities.db`) |
-| `running_api_storage` | Archivos TCX de respaldo |
+| `postgres_data` | Datos de PostgreSQL |
+| `running_api_storage` | Archivos de actividad de respaldo |
 
 ---
 
@@ -219,6 +237,8 @@ docker-compose down
 |--------|------|-------------|
 | `POST` | `/upload` | Importar un archivo individual (TCX, GPX o FIT) |
 | `POST` | `/upload-bulk` | Importar un ZIP con múltiples archivos (TCX, GPX y FIT) |
+| `GET` | `/upload-status/{uploadId}` | Consultar el estado de una carga masiva |
+| `GET` | `/upload-status/{uploadId}/stream` | Stream SSE del progreso de la carga |
 | `GET` | `/export-bulk` | Exportar datos JSON en ZIP |
 | `GET` | `/export-backup-zip` | Exportar archivos físicos de respaldo en ZIP |
 
@@ -238,6 +258,7 @@ docker-compose down
 |--------|------|-------------|
 | `GET` | `/summary` | Resumen acumulado (con `?period=` o `?year=`) |
 | `GET` | `/records` | Marcas personales (PB) |
+| `POST` | `/recalculate` | Recalcular estadísticas globales y récords desde cero |
 
 ### Analítica (`/api/v1/analytics`)
 
@@ -258,6 +279,13 @@ docker-compose down
 |--------|------|-------------|
 | `GET` | `/{id}/geojson` | Exportar ruta en GeoJSON |
 | `GET` | `/{id}/gpx` | Exportar ruta en GPX 1.1 |
+
+### MCP (`/mcp`)
+
+| Método | Path | Descripción |
+|--------|------|-------------|
+| `POST` | `/mcp` | Endpoint principal MCP (JSON-RPC 2.0) |
+| `GET` | `/mcp` | Endpoint SSE (requiere cabecera `Mcp-Session-Id`) |
 
 ---
 

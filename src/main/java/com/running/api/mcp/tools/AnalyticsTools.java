@@ -1,17 +1,15 @@
 package com.running.api.mcp.tools;
 
-import java.util.List;
-
-import org.springframework.stereotype.Component;
-
 import com.running.api.dto.AcwrStatusDto;
 import com.running.api.dto.HrZonesResponseDto;
 import com.running.api.dto.SplitDto;
 import com.running.api.dto.TrainingLoadResponseDto;
 import com.running.api.dto.Vo2MaxVamResponseDto;
 import com.running.api.service.AnalyticsService;
-
 import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 @Component
 @RequiredArgsConstructor

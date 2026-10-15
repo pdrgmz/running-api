@@ -1,13 +1,10 @@
 package com.running.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.running.api.dto.BulkFileUploadResponseDto;
 import com.running.api.model.Activity;
 import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.ActivityRepository;
-import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
-import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,7 +44,6 @@ public class FileService {
     private final BackupStorageService backupStorageService;
     private final ObjectMapper objectMapper;
     private final GlobalSummaryStatsRepository summaryStatsRepository;
-    private final ActivityTrackpointRepository trackpointRepository;
     private final StatsService statsService;
     private final BulkUploadStatusTracker bulkUploadStatusTracker;
     private final PlatformTransactionManager transactionManager;
@@ -82,21 +78,6 @@ public class FileService {
     }
 
     @Async("taskExecutor")
-    public CompletableFuture<Activity> saveActivityFileAsync(MultipartFile file) throws Exception {
-        return CompletableFuture.completedFuture(saveActivityFile(file));
-    }
-
-    @Async("taskExecutor")
-    public CompletableFuture<Activity> saveActivityInputStreamAsync(InputStream is, String fileType) throws Exception {
-        return CompletableFuture.completedFuture(saveActivityInputStream(is, fileType));
-    }
-
-    @Async("taskExecutor")
-    public CompletableFuture<BulkFileUploadResponseDto> saveBulkFilesAsync(MultipartFile file) {
-        return CompletableFuture.completedFuture(saveBulkFiles(file));
-    }
-
-    @Async("taskExecutor")
     public void processBulkUploadAsync(byte[] zipBytes, String filename, String uploadId) {
         try {
             log.info("[{}] Iniciando carga de {} archivos desde {}", uploadId, filename, zipBytes.length);
@@ -127,18 +108,6 @@ public class FileService {
 
             return createActivity(activity);
         }
-    }
-
-    @Transactional
-    public Activity saveActivityInputStream(InputStream is, String fileType) throws Exception {
-        byte[] bytes = is.readAllBytes();
-        Activity activity = parseFile(new ByteArrayInputStream(bytes), fileType);
-        activity.setSourceFileType(fileType);
-
-        String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId(), fileType);
-        activity.setBackupFilePath(backupPath);
-
-        return createActivity(activity);
     }
 
     /**
@@ -293,82 +262,6 @@ public class FileService {
     }
 
     private record ZipFileData(String fileName, String fileType, byte[] data) {}
-
-    @Transactional
-    public BulkFileUploadResponseDto saveBulkFiles(MultipartFile file) {
-        int successCount = 0;
-        int errorCount = 0;
-        List<String> errors = new ArrayList<>();
-        int totalProcessed = 0;
-
-        String filename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "";
-
-        if (filename.toLowerCase().endsWith(".zip")) {
-            BulkFileUploadResponseDto zipResult = processZipFile(file);
-            successCount += zipResult.getSuccessCount();
-            errorCount += zipResult.getErrorCount();
-            totalProcessed += zipResult.getTotalFiles();
-            if (zipResult.getErrors() != null) {
-                errors.addAll(zipResult.getErrors());
-            }
-        } else {
-            totalProcessed++;
-            try {
-                saveActivityFile(file);
-                successCount++;
-            } catch (Exception e) {
-                errorCount++;
-                errors.add("Error en " + filename + ": " + e.getMessage());
-            }
-        }
-
-        return BulkFileUploadResponseDto.builder()
-                .totalFiles(totalProcessed)
-                .successCount(successCount)
-                .errorCount(errorCount)
-                .errors(errors)
-                .build();
-    }
-
-    private BulkFileUploadResponseDto processZipFile(MultipartFile file) {
-        int successCount = 0;
-        int errorCount = 0;
-        int totalProcessed = 0;
-        List<String> errors = new ArrayList<>();
-
-        try (ZipInputStream zis = new ZipInputStream(file.getInputStream())) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) continue;
-                String entryName = entry.getName();
-                String lowerName = entryName.toLowerCase();
-
-                if (lowerName.endsWith(TCX_EXTENSION) || lowerName.endsWith(GPX_EXTENSION) || lowerName.endsWith(FIT_EXTENSION)) {
-                    totalProcessed++;
-                    try {
-                        byte[] entryData = zis.readAllBytes();
-                        String fileType = detectFileType(entryName);
-                        saveActivityInputStream(new ByteArrayInputStream(entryData), fileType);
-                        successCount++;
-                    } catch (Exception e) {
-                        errorCount++;
-                        errors.add("Error en archivo " + entryName + " dentro de " + file.getOriginalFilename() + ": " + e.getMessage());
-                    }
-                }
-                zis.closeEntry();
-            }
-        } catch (Exception e) {
-            errorCount++;
-            errors.add("Error al descomprimir el archivo ZIP " + file.getOriginalFilename() + ": " + e.getMessage());
-        }
-
-        return BulkFileUploadResponseDto.builder()
-                .totalFiles(totalProcessed)
-                .successCount(successCount)
-                .errorCount(errorCount)
-                .errors(errors)
-                .build();
-    }
 
     public void exportBulkJsonZip(List<String> ids, HttpServletResponse response) throws Exception {
         List<Activity> activities = (ids != null && !ids.isEmpty())

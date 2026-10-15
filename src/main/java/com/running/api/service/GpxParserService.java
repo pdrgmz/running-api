@@ -230,15 +230,6 @@ public class GpxParserService {
         }
     }
 
-    private JsonNode findFirstChild(JsonNode parent) {
-        if (parent == null || !parent.isObject()) return null;
-        Iterator<String> it = parent.fieldNames();
-        if (it.hasNext()) {
-            return parent.get(it.next());
-        }
-        return null;
-    }
-
     private static JsonNode findChild(JsonNode parent, String name) {
         if (parent == null || !parent.isObject()) return null;
         Iterator<String> it = parent.fieldNames();

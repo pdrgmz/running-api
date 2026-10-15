@@ -1,26 +1,25 @@
 package com.running.api.service;
 
-import com.running.api.dto.FitActivityDTO;
+import com.garmin.fit.DateTime;
 import com.garmin.fit.Decode;
 import com.garmin.fit.Mesg;
 import com.garmin.fit.MesgBroadcaster;
 import com.garmin.fit.MesgListener;
-import com.garmin.fit.RecordMesg;
 import com.garmin.fit.RecordMesgListener;
 import com.garmin.fit.SessionMesg;
 import com.garmin.fit.SessionMesgListener;
 import com.garmin.fit.SportMesg;
 import com.garmin.fit.SportMesgListener;
-import com.garmin.fit.DateTime;
-import com.running.api.model.Activity;
+import com.running.api.dto.FitActivityDTO;
 import com.running.api.mapper.ActivityMapper;
+import com.running.api.model.Activity;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import lombok.RequiredArgsConstructor;
 
 @Slf4j
 @Service

@@ -45,8 +45,6 @@ El servidor implementa el protocolo MCP versión **2024-11-05** con soporte para
 |----------|-------------|
 | `POST /mcp` | Endpoint principal MCP (JSON-RPC) |
 | `GET /mcp` | Endpoint SSE (requiere `Mcp-Session-Id`) |
-| `GET /actuator/health` | Estado de la aplicación |
-| `GET /actuator/prometheus` | Métricas Prometheus |
 
 ---
 
@@ -189,9 +187,6 @@ docker-compose up -d
 ### Verificar que funcione
 
 ```bash
-# Health check
-curl http://localhost:8080/actuator/health
-
 # MCP initialize
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \

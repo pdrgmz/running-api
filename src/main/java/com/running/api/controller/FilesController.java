@@ -1,6 +1,5 @@
 package com.running.api.controller;
 
-import com.running.api.dto.BulkFileUploadResponseDto;
 import com.running.api.dto.BulkUploadStatusDto;
 import com.running.api.dto.FileUploadResponseDto;
 import com.running.api.model.Activity;
@@ -11,6 +10,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -29,6 +29,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/files")
 @RequiredArgsConstructor
+@Slf4j
 @Tag(name = "Archivos", description = "Endpoints para la importación y exportación de archivos TCX, GPX y FIT.")
 public class FilesController {
 
@@ -49,9 +50,9 @@ public class FilesController {
                     .build();
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Error al procesar el archivo {}: {}", file.getOriginalFilename(), e.getMessage(), e);
             FileUploadResponseDto errorResponse = FileUploadResponseDto.builder()
-                    .message("Error al procesar el archivo: " + e.getClass().getSimpleName() + ": " + e.getMessage())
+                    .message("Error al procesar el archivo: " + e.getMessage())
                     .build();
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
         }

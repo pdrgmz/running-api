@@ -10,7 +10,6 @@ import com.running.api.repository.PersonalRecordRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,7 +18,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -32,26 +30,6 @@ public class ActivityService {
     private final BackupStorageService backupStorageService;
     private final FileService fileService;
     private final StatsService statsService;
-
-    @Async("taskExecutor")
-    public CompletableFuture<Page<Activity>> getAllActivitiesAsync(Pageable pageable) {
-        return CompletableFuture.completedFuture(getAllActivities(pageable));
-    }
-
-    @Async("taskExecutor")
-    public CompletableFuture<Optional<Activity>> getActivityByIdAsync(String id) {
-        return CompletableFuture.completedFuture(getActivityById(id));
-    }
-
-    @Async("taskExecutor")
-    public CompletableFuture<List<ActivityTrackpoint>> getActivityTrackpointsByIdAsync(String id, String resolution) {
-        return CompletableFuture.completedFuture(getActivityTrackpointsById(id, resolution));
-    }
-
-    @Async("taskExecutor")
-    public CompletableFuture<Boolean> deleteActivityByIdAsync(String id) {
-        return CompletableFuture.completedFuture(deleteActivityById(id));
-    }
 
     @Transactional(readOnly = true)
     public Page<Activity> getAllActivities(Pageable pageable) {

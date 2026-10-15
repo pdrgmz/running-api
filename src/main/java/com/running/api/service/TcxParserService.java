@@ -18,7 +18,6 @@ import java.time.ZonedDateTime;
 public class TcxParserService {
 
     private static final double NO_DATA_ALTITUDE = -999.0;
-    private static final double ELEVATION_NOISE_THRESHOLD = 0.01;
     private static final double MAX_VALID_SPEED = 20.0;
     private static final double HAVERSINE_MAX_DELTA = 100.0;
     private static final double EARTH_RADIUS_METERS = 6371000.0;
@@ -114,7 +113,7 @@ public class TcxParserService {
                 if (alt != NO_DATA_ALTITUDE) {
                     if (prevAlt != NO_DATA_ALTITUDE) {
                         double diff = alt - prevAlt;
-                        if (Math.abs(diff) > ELEVATION_NOISE_THRESHOLD) {
+                        if (Math.abs(diff) > elevationThreshold) {
                             if (diff > 0) elevationGain += diff;
                             else elevationLoss += Math.abs(diff);
                             prevAlt = alt;
