@@ -21,7 +21,7 @@ public class CorsConfig {
                         .allowedOriginPatterns(allowedOrigins)
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
                         .allowedHeaders("*")
-                        .exposedHeaders("Authorization", "Content-Disposition")
+                        .exposedHeaders("Authorization", "Content-Disposition", "Mcp-Session-Id")
                         .allowCredentials(true)
                         .maxAge(3600);
             }
