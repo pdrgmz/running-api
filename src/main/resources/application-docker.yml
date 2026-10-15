@@ -1,0 +1,39 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://postgres:5432/running_api
+    username: runninging
+    password: runninging
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 300000
+      max-lifetime: 600000
+      leak-detection-threshold: 60000
+      initialization-fail-timeout: -1
+      connection-test-query: SELECT 1
+  jpa:
+    hibernate:
+      ddl-auto: update
+      dialect: org.hibernate.dialect.PostgreSQLDialect
+    show-sql: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc:
+          batch_size: 500
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+app:
+  storage:
+    location: /app/storage
+
+logging:
+  level:
+    com.running.api: INFO
+    com.running.api.service.FileService: DEBUG
+    com.running.api.service.BulkUploadStatusTracker: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
