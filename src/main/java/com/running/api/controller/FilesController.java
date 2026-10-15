@@ -3,7 +3,6 @@ package com.running.api.controller;
 import com.running.api.dto.BulkFileUploadResponseDto;
 import com.running.api.dto.BulkUploadStatusDto;
 import com.running.api.dto.FileUploadResponseDto;
-import com.running.api.metrics.MetricsService;
 import com.running.api.model.Activity;
 import com.running.api.service.BulkUploadStatusTracker;
 import com.running.api.service.FileService;
@@ -12,7 +11,6 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -28,7 +26,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.List;
 
-@Slf4j
 @RestController
 @RequestMapping("/api/v1/files")
 @RequiredArgsConstructor
@@ -37,12 +34,10 @@ public class FilesController {
 
     private final FileService fileService;
     private final BulkUploadStatusTracker bulkUploadStatusTracker;
-    private final MetricsService metricsService;
 
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
     @Operation(summary = "Importar un archivo individual (TCX, GPX o FIT)", description = "Parsea e inserta la actividad en la BD y guarda el archivo físico de respaldo.")
     public ResponseEntity<FileUploadResponseDto> uploadSingleFile(@RequestParam("file") MultipartFile file) {
-        long startTime = System.currentTimeMillis();
         try {
             Activity activity = fileService.saveActivityFile(file);
             FileUploadResponseDto response = FileUploadResponseDto.builder()
@@ -52,14 +47,9 @@ public class FilesController {
                     .sourceFileType(activity.getSourceFileType())
                     .totalPoints(activity.getTrackpoints() != null ? activity.getTrackpoints().size() : 0)
                     .build();
-            long duration = System.currentTimeMillis() - startTime;
-            metricsService.recordApiCall("/api/v1/files/upload", "POST", 201, duration);
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         } catch (Exception e) {
-            long duration = System.currentTimeMillis() - startTime;
-            metricsService.recordApiCall("/api/v1/files/upload", "POST", 500, duration);
-            log.error("[UPLOAD] Error procesando archivo '{}': {}",
-                    file.getOriginalFilename(), e.getMessage(), e);
+            e.printStackTrace();
             FileUploadResponseDto errorResponse = FileUploadResponseDto.builder()
                     .message("Error al procesar el archivo: " + e.getClass().getSimpleName() + ": " + e.getMessage())
                     .build();

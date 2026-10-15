@@ -5,7 +5,6 @@ import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -14,7 +13,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class TcxParserService {
@@ -32,17 +30,14 @@ public class TcxParserService {
     private double elevationThreshold;
 
     public Activity parse(InputStream inputStream) throws Exception {
-        log.debug("[TCX] Iniciando parseo de archivo TCX");
         JsonNode root = xmlMapper.readTree(inputStream);
         JsonNode activityNode = root.path("Activities").path("Activity");
 
         if (activityNode.isMissingNode()) {
-            log.error("[TCX] Estructura de archivo TCX no válida: Falta la etiqueta <Activity>");
             throw new IllegalArgumentException("Estructura de archivo TCX no válida: Falta la etiqueta <Activity>.");
         }
 
         String rawId = activityNode.path("Id").asText();
-        log.debug("[TCX] Parseando actividad con ID: {}", rawId);
         LocalDateTime startTime = ZonedDateTime.parse(rawId).toLocalDateTime();
 
         double totalDistance = 0.0;
@@ -190,9 +185,6 @@ public class TcxParserService {
             analyticsService.populateMetrics(activity);
         }
 
-        log.info("[TCX] Actividad parseada exitosamente: ID={}, Trackpoints={}, Distancia={}m, Tiempo={}s",
-                activity.getId(), activity.getTrackpoints().size(),
-                activity.getDistanceMeters(), activity.getTotalTimeSeconds());
         return activity;
     }
 

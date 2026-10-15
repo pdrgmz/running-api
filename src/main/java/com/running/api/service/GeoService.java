@@ -7,7 +7,6 @@ import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,7 +17,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class GeoService {
@@ -38,7 +36,6 @@ public class GeoService {
 
     @Transactional(readOnly = true)
     public GeoJsonDto exportGeoJson(String activityId) {
-        log.debug("[GEO] Exportando GeoJSON para actividad: {}", activityId);
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
@@ -54,8 +51,6 @@ public class GeoService {
                 ));
             }
         }
-
-        log.debug("[GEO] GeoJSON generado para {} con {} coordenadas", activityId, coordinates.size());
 
         GeoJsonDto.Geometry geometry = GeoJsonDto.Geometry.builder()
                 .type("LineString")
@@ -81,7 +76,6 @@ public class GeoService {
 
     @Transactional(readOnly = true)
     public String exportGpx(String activityId) {
-        log.debug("[GEO] Exportando GPX para actividad: {}", activityId);
         Activity activity = activityRepository.findById(activityId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
@@ -98,7 +92,6 @@ public class GeoService {
         gpx.append("    <name>").append(activity.getName()).append("</name>\n");
         gpx.append("    <trkseg>\n");
 
-        int exportedPoints = 0;
         for (ActivityTrackpoint pt : trackpoints) {
             if (pt.getLatitude() != null && pt.getLongitude() != null) {
                 gpx.append(String.format(Locale.US, "      <trkpt lat=\"%.6f\" lon=\"%.6f\">\n", pt.getLatitude(), pt.getLongitude()));
@@ -107,7 +100,6 @@ public class GeoService {
                 }
                 gpx.append("        <time>").append(pt.getTimestamp()).append("Z</time>\n");
                 gpx.append("      </trkpt>\n");
-                exportedPoints++;
             }
         }
 
@@ -115,7 +107,6 @@ public class GeoService {
         gpx.append("  </trk>\n");
         gpx.append("</gpx>");
 
-        log.debug("[GEO] GPX generado para {} con {} puntos exportados", activityId, exportedPoints);
         return gpx.toString();
     }
 }

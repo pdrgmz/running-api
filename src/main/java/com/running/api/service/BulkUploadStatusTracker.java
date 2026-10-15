@@ -3,7 +3,6 @@ package com.running.api.service;
 import com.running.api.dto.BulkUploadStatusDto;
 import com.running.api.dto.FileErrorDto;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -12,7 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class BulkUploadStatusTracker {
@@ -36,7 +34,6 @@ public class BulkUploadStatusTracker {
                 .errors(new CopyOnWriteArrayList<>())
                 .build();
         uploads.put(uploadId, status);
-        log.debug("[UPLOAD] Nueva carga creada: uploadId={}, filename={}", uploadId, filename);
         return uploadId;
     }
 
@@ -77,9 +74,7 @@ public class BulkUploadStatusTracker {
     public void setStatus(String uploadId, String newStatus) {
         BulkUploadStatusDto status = uploads.get(uploadId);
         if (status != null) {
-            String oldStatus = status.getStatus();
             status.setStatus(newStatus);
-            log.info("[UPLOAD] Estado cambiado: {} | {} -> {}", uploadId, oldStatus, newStatus);
             notifyListeners(uploadId);
         }
     }
@@ -106,8 +101,6 @@ public class BulkUploadStatusTracker {
                     .fileName(fileName)
                     .errorMessage(errorMessage)
                     .build());
-            log.warn("[UPLOAD] Error en archivo: {} | uploadId={} | Error: {}",
-                    fileName, uploadId, errorMessage);
             notifyListeners(uploadId);
         }
     }

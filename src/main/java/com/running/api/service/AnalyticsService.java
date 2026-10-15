@@ -17,7 +17,6 @@ import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.projection.DailyTrimpProjection;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -29,7 +28,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AnalyticsService {
