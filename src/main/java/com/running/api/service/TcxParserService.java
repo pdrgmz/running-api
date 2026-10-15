@@ -21,8 +21,6 @@ import java.time.ZonedDateTime;
 public class TcxParserService {
 
     private static final double NO_DATA_ALTITUDE = ElevationAccumulator.NO_DATA;
-    private static final double MAX_VALID_SPEED = 20.0;
-    private static final double HAVERSINE_MAX_DELTA = 100.0;
 
     private final XmlMapper xmlMapper = new XmlMapper();
     private final AnalyticsService analyticsService;
@@ -97,13 +95,17 @@ public class TcxParserService {
                 if (rawDistance >= 0.0) {
                     runningTotalDistance = rawDistance;
                 } else if (lat != null && lon != null && prevPoint != null
-                           && prevPoint.getLatitude() != null && prevPoint.getLongitude() != null) {
+                           && prevPoint.getLatitude() != null && prevPoint.getLongitude() != null
+                           && prevPoint.getTimestamp() != null) {
                     double deltaMeters = GeoUtils.haversineMeters(
                         prevPoint.getLatitude(), prevPoint.getLongitude(),
                         lat, lon
                     );
+                    long dt = Duration.between(prevPoint.getTimestamp(), pointTime).getSeconds();
 
-                    if (deltaMeters > 0.0 && deltaMeters < HAVERSINE_MAX_DELTA) {
+                    // Solo se acepta el incremento si es coherente con el tiempo transcurrido.
+                    if (deltaMeters > 0.0 && dt > 0
+                            && deltaMeters <= RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS * dt) {
                         runningTotalDistance += deltaMeters;
                     }
                 }
@@ -136,7 +138,7 @@ public class TcxParserService {
                     }
                 }
 
-                if (pointSpeed > calculatedMaxSpeed && pointSpeed < MAX_VALID_SPEED) {
+                if (pointSpeed > calculatedMaxSpeed && pointSpeed < RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS) {
                     calculatedMaxSpeed = pointSpeed;
                 }
 

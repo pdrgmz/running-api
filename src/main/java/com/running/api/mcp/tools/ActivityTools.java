@@ -86,27 +86,38 @@ public class ActivityTools {
             FC Máxima: %s bpm
             FC Promedio: %s bpm
             Elevación: +%.0f m / -%.0f m
-            Calorías: %d
+            Calorías: %s
             
             """,
             a.getName(),
             a.getId(),
             a.getName(),
             a.getStartTime(),
-            a.getDistanceMeters() / 1000.0,
-            a.getTotalTimeSeconds() / 60.0,
-            a.getAvgSpeed() * 3.6,
+            distanceKm(a),
+            minutes(a),
+            speedKmh(a),
             a.getMaxHeartRate() != null ? a.getMaxHeartRate() : "N/A",
             a.getAvgHeartRate() != null ? a.getAvgHeartRate() : "N/A",
-            a.getElevationGain(),
-            a.getElevationLoss(),
-            a.getTotalCalories()
+            a.getElevationGain() != null ? a.getElevationGain() : 0.0,
+            a.getElevationLoss() != null ? a.getElevationLoss() : 0.0,
+            a.getTotalCalories() != null ? a.getTotalCalories().toString() : "N/A"
         );
     }
 
     private String formatActivitySummary(Activity a) {
         return String.format("- ID: %s | Fecha: %s | Distancia: %.2f km | Tiempo: %.0f min\n",
-            a.getId(), a.getStartTime(),
-            a.getDistanceMeters() / 1000.0, a.getTotalTimeSeconds() / 60.0);
+            a.getId(), a.getStartTime(), distanceKm(a), minutes(a));
+    }
+
+    private static double distanceKm(Activity a) {
+        return a.getDistanceMeters() != null ? a.getDistanceMeters() / 1000.0 : 0.0;
+    }
+
+    private static double minutes(Activity a) {
+        return a.getTotalTimeSeconds() != null ? a.getTotalTimeSeconds() / 60.0 : 0.0;
+    }
+
+    private static double speedKmh(Activity a) {
+        return a.getAvgSpeed() != null ? a.getAvgSpeed() * 3.6 : 0.0;
     }
 }

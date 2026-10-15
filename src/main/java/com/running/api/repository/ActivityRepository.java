@@ -48,7 +48,7 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
     @Query("""
         SELECT 
             CAST(a.startTime AS java.time.LocalDate) AS date, 
-            SUM(a.trainingLoad) AS totalTrimp 
+            COALESCE(SUM(a.trainingLoad), 0.0) AS totalTrimp 
         FROM Activity a 
         WHERE CAST(a.startTime AS java.time.LocalDate) BETWEEN :startDate AND :endDate 
         GROUP BY CAST(a.startTime AS java.time.LocalDate) 
@@ -61,7 +61,7 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
 
     @Query("""
         SELECT 
-            CAST(FLOOR(SUM(a.distanceMeters) / 1000.0) AS int) 
+            CAST(FLOOR(COALESCE(SUM(a.distanceMeters), 0.0) / 1000.0) AS int) 
         FROM Activity a 
         GROUP BY CAST(a.startTime AS java.time.LocalDate) 
         ORDER BY 1 DESC

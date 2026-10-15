@@ -10,6 +10,8 @@ import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
 import com.running.api.repository.PersonalRecordRepository;
+import com.running.api.util.DistanceSeries;
+import com.running.api.util.RunningMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -201,22 +203,12 @@ public class StatsService {
     }
 
     /**
-     * Velocidad máxima físicamente plausible (m/s) para una carrera. Cualquier incremento de
-     * distancia que implique superarla se considera un glitch del sensor (p. ej. saltos de varios
-     * kilómetros en un segundo) y se descarta. 15 m/s ≈ 54 km/h, muy por encima de cualquier marca
-     * real, por lo que no altera la telemetría válida.
-     */
-    private static final double MAX_PLAUSIBLE_SPEED_MPS = 15.0;
-
-    /**
      * Devuelve el menor tiempo (segundos, con precisión sub-muestra) necesario para cubrir
      * {@code targetMeters} dentro de la serie de puntos, o {@code null} si no hay datos suficientes.
      * <p>
-     * La distancia acumulada se reconstruye antes como una serie monótona y físicamente plausible:
-     * se suman los incrementos entre muestras consecutivas descartando los negativos (reinicios del
-     * contador) y los que implican una velocidad superior a {@link #MAX_PLAUSIBLE_SPEED_MPS}
-     * (saltos/glitches del sensor). Así, un único punto corrupto no puede producir un tramo
-     * artificialmente rápido.
+     * La distancia acumulada se reconstruye antes con {@link DistanceSeries} como una serie monótona
+     * y físicamente plausible (descarta reinicios del contador y saltos/glitches del sensor). Así,
+     * un único punto corrupto no puede producir un tramo artificialmente rápido.
      * <p>
      * Sobre la serie reconstruida se usa una ventana deslizante monótona: como la distancia es
      * creciente, el extremo derecho mínimo para un inicio dado también crece, por lo que el coste
@@ -225,50 +217,27 @@ public class StatsService {
      * (sin sobrepasarlo).
      */
     Double findFastestSegment(List<ActivityTrackpoint> points, double targetMeters) {
-        // 1. Reconstruir una serie de distancia monótona y plausible a partir de las muestras.
+        // 1. Compactar las muestras con distancia y timestamp válidos.
         int n = points.size();
-        double[] distance = new double[n];
+        double[] rawDistance = new double[n];
         double[] timeSeconds = new double[n];
         int count = 0;
 
         LocalDateTime base = null;
-        double accumulatedDistance = 0.0;
-        double previousRawDistance = 0.0;
-        double previousTime = 0.0;
-
         for (ActivityTrackpoint point : points) {
             if (point.getDistanceMeters() == null || point.getTimestamp() == null) continue;
-
-            double rawDistance = point.getDistanceMeters();
-            double time;
-            if (count == 0) {
-                base = point.getTimestamp();
-                time = 0.0;
-                accumulatedDistance = rawDistance;
-            } else {
-                time = Duration.between(base, point.getTimestamp()).toNanos() / 1_000_000_000.0;
-                double deltaTime = time - previousTime;
-                double increment = rawDistance - previousRawDistance;
-
-                if (increment < 0) {
-                    increment = 0.0; // el contador acumulado no puede retroceder
-                }
-                double maxIncrement = MAX_PLAUSIBLE_SPEED_MPS * deltaTime;
-                if (increment > maxIncrement) {
-                    increment = 0.0; // salto imposible: se descarta el incremento corrupto
-                }
-                accumulatedDistance += increment;
-            }
-
-            distance[count] = accumulatedDistance;
-            timeSeconds[count] = time;
-            previousRawDistance = rawDistance;
-            previousTime = time;
+            if (base == null) base = point.getTimestamp();
+            rawDistance[count] = point.getDistanceMeters();
+            timeSeconds[count] = Duration.between(base, point.getTimestamp()).toNanos() / 1_000_000_000.0;
             count++;
         }
         if (count < 2) return null;
 
-        // 2. Ventana deslizante: 'right' solo avanza, nunca retrocede.
+        // 2. Reconstruir una distancia monótona y plausible (descarta glitches del sensor).
+        double[] distance = DistanceSeries.reconstruct(
+                rawDistance, timeSeconds, count, RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS);
+
+        // 3. Ventana deslizante: 'right' solo avanza, nunca retrocede.
         Double minTimeSec = null;
         int right = 1;
 
@@ -279,7 +248,7 @@ public class StatsService {
             while (right < count && distance[right] < needed) right++;
             if (right >= count) break; // no queda distancia suficiente desde 'left' en adelante
 
-            // 3. Interpolar el instante exacto en el que se alcanza 'needed' entre right-1 y right.
+            // 4. Interpolar el instante exacto en el que se alcanza 'needed' entre right-1 y right.
             double previousDistance = distance[right - 1];
             double endTime;
             if (distance[right] > previousDistance) {

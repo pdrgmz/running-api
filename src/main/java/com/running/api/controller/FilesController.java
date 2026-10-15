@@ -49,12 +49,18 @@ public class FilesController {
                     .totalPoints(activity.getTrackpoints() != null ? activity.getTrackpoints().size() : 0)
                     .build();
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        } catch (IllegalArgumentException e) {
+            // Archivo inválido o de un deporte no soportado: es un error del cliente (400).
+            log.warn("Archivo rechazado {}: {}", file.getOriginalFilename(), e.getMessage());
+            return ResponseEntity.badRequest().body(FileUploadResponseDto.builder()
+                    .message(e.getMessage())
+                    .build());
         } catch (Exception e) {
+            // El resto son fallos internos: no se filtra el detalle al cliente.
             log.error("Error al procesar el archivo {}: {}", file.getOriginalFilename(), e.getMessage(), e);
-            FileUploadResponseDto errorResponse = FileUploadResponseDto.builder()
-                    .message("Error al procesar el archivo: " + e.getMessage())
-                    .build();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(FileUploadResponseDto.builder()
+                    .message("Error interno al procesar el archivo")
+                    .build());
         }
     }
 

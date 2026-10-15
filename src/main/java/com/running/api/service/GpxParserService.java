@@ -24,8 +24,6 @@ public class GpxParserService {
 
     private static final double NO_DATA_ALTITUDE = ElevationAccumulator.NO_DATA;
     private static final double ELEVATION_NOISE_THRESHOLD = 0.01;
-    private static final double MAX_VALID_SPEED = 20.0;
-    private static final double HAVERSINE_MAX_DELTA = 100.0;
 
     private final XmlMapper xmlMapper = new XmlMapper();
     private final AnalyticsService analyticsService;
@@ -131,12 +129,17 @@ public class GpxParserService {
 
             double pointSpeed = extractSpeed(tp);
 
-            // Calcular distancia con Haversine si no hay campo distance
+            // Calcular distancia con Haversine si no hay campo distance.
+            // El incremento solo se acepta si es coherente con el tiempo transcurrido: así se
+            // descartan los saltos corruptos del GPS sin perder distancia en intervalos largos
+            // (un hueco de 60 s a 8 km/h son ~133 m, muy por encima del antiguo tope fijo de 100 m).
             if (lat != null && lon != null && prevPoint != null
-                    && prevPoint.getLatitude() != null && prevPoint.getLongitude() != null) {
+                    && prevPoint.getLatitude() != null && prevPoint.getLongitude() != null
+                    && prevPoint.getTimestamp() != null) {
                 double delta = GeoUtils.haversineMeters(
                         prevPoint.getLatitude(), prevPoint.getLongitude(), lat, lon);
-                if (delta > 0 && delta < HAVERSINE_MAX_DELTA) {
+                long dt = java.time.Duration.between(prevPoint.getTimestamp(), pointTime).getSeconds();
+                if (delta > 0 && dt > 0 && delta <= RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS * dt) {
                     runningTotalDistance += delta;
                 }
             }
@@ -149,7 +152,7 @@ public class GpxParserService {
                 }
             }
 
-            if (pointSpeed > calculatedMaxSpeed && pointSpeed < MAX_VALID_SPEED) {
+            if (pointSpeed > calculatedMaxSpeed && pointSpeed < RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS) {
                 calculatedMaxSpeed = pointSpeed;
             }
 

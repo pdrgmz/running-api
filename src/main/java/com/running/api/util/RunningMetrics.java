@@ -7,6 +7,14 @@ package com.running.api.util;
  */
 public final class RunningMetrics {
 
+    /**
+     * Velocidad máxima físicamente plausible (m/s) para una carrera a pie. Cualquier incremento de
+     * distancia que implique superarla se considera un glitch del sensor (p. ej. saltos de varios
+     * kilómetros en un segundo). 15 m/s ≈ 54 km/h, muy por encima de cualquier marca real, por lo
+     * que no altera la telemetría válida. Se usa de forma uniforme en parsers y analítica.
+     */
+    public static final double MAX_PLAUSIBLE_SPEED_MPS = 15.0;
+
     private static final double MIN_SPEED_FOR_VO2_MS = 1.0;
     private static final double MIN_VALID_VO2 = 20.0;
     private static final double MAX_VALID_VO2 = 100.0;

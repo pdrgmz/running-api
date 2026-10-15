@@ -13,6 +13,7 @@ import com.garmin.fit.SportMesgListener;
 import com.running.api.dto.FitActivityDTO;
 import com.running.api.mapper.ActivityMapper;
 import com.running.api.model.Activity;
+import com.running.api.util.DistanceSeries;
 import com.running.api.util.ElevationAccumulator;
 import com.running.api.util.GeoUtils;
 import com.running.api.util.RunningMetrics;
@@ -21,8 +22,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Objects;
 
 @Slf4j
 @Service
@@ -75,8 +79,11 @@ public class FitParserService {
             } catch (Exception e) {
                 // ignorar
             }
-            if (mesg.getTimestamp() != null && mesg.getTimestamp().getDate() != null) {
-                activityDTO.setTimestamp(convertToLocalDateTime(mesg.getTimestamp()));
+            // getStartTime() es el inicio real de la sesión; getTimestamp() sería el FIN.
+            // Nos quedamos con el primer start_time recibido (archivos multi-sesión).
+            if (activityDTO.getTimestamp() == null
+                    && mesg.getStartTime() != null && mesg.getStartTime().getDate() != null) {
+                activityDTO.setTimestamp(convertToLocalDateTime(mesg.getStartTime()));
             }
             if (mesg.getTotalDistance() != null) {
                 activityDTO.setTotalDistanceMeters((double) mesg.getTotalDistance());
@@ -163,6 +170,20 @@ public class FitParserService {
             );
         }
 
+        // Fallback: si la sesión no traía start_time, usamos el primer trackpoint para que
+        // startTime (y el ID derivado) sea el inicio real y no el fin de sesión.
+        if (activityDTO.getTimestamp() == null) {
+            activityDTO.getTrackPoints().stream()
+                    .map(FitActivityDTO.TrackPoint::getTimestamp)
+                    .filter(Objects::nonNull)
+                    .findFirst()
+                    .ifPresent(activityDTO::setTimestamp);
+        }
+
+        // Sanea la distancia acumulada: los dispositivos FIT pueden reportar saltos corruptos
+        // (p. ej. +4 km en 1 s) que corromperían splits, récords y desacople.
+        sanitizeDistances(activityDTO.getTrackPoints());
+
         // Asignar elevation gain y loss calculados
         if (elevation.getGain() > 0) {
             activityDTO.setElevationGain(elevation.getGain());
@@ -196,6 +217,37 @@ public class FitParserService {
         activityDTO.setVo2MaxEstimated(RunningMetrics.vo2Max(maxSpeedMs));
 
         return activityMapper.toEntity(activityDTO, "");
+    }
+
+    /**
+     * Reescribe la distancia de cada trackpoint por una serie monótona y físicamente plausible,
+     * descartando saltos corruptos del sensor (ver {@link DistanceSeries}).
+     */
+    private void sanitizeDistances(List<FitActivityDTO.TrackPoint> trackPoints) {
+        int n = trackPoints.size();
+        if (n < 2) return;
+
+        double[] raw = new double[n];
+        double[] time = new double[n];
+        int count = 0;
+        LocalDateTime base = null;
+
+        for (FitActivityDTO.TrackPoint tp : trackPoints) {
+            if (tp.getDistanceMeters() == null || tp.getTimestamp() == null) continue;
+            if (base == null) base = tp.getTimestamp();
+            raw[count] = tp.getDistanceMeters();
+            time[count] = Duration.between(base, tp.getTimestamp()).toNanos() / 1_000_000_000.0;
+            count++;
+        }
+        if (count < 2) return;
+
+        double[] sanitized = DistanceSeries.reconstruct(raw, time, count, RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS);
+
+        int i = 0;
+        for (FitActivityDTO.TrackPoint tp : trackPoints) {
+            if (tp.getDistanceMeters() == null || tp.getTimestamp() == null) continue;
+            tp.setDistanceMeters(sanitized[i++]);
+        }
     }
 
     /**

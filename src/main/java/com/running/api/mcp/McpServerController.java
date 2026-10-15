@@ -2,6 +2,7 @@ package com.running.api.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.running.api.mcp.tools.ActivityTools;
 import com.running.api.mcp.tools.AnalyticsTools;
@@ -142,7 +143,8 @@ public class McpServerController {
             HttpServletResponse response) {
         String method = request.path("method").asText();
         JsonNode params = request.path("params");
-        int id = request.path("id").asInt(0);
+        // JSON-RPC permite que el id sea número o cadena: se conserva tal cual para devolverlo.
+        JsonNode id = request.path("id");
 
         log.debug("[MCP] Método recibido: {} (session: {})", method, sessionId);
 
@@ -184,7 +186,7 @@ public class McpServerController {
         return result;
     }
 
-    private JsonNode initialize(int id, HttpServletResponse httpResponse) {
+    private JsonNode initialize(JsonNode id, HttpServletResponse httpResponse) {
         ObjectNode resultNode = objectMapper.createObjectNode();
         resultNode.put("protocolVersion", PROTOCOL_VERSION);
         resultNode.putObject("capabilities")
@@ -194,25 +196,19 @@ public class McpServerController {
                 .put("name", "running-api")
                 .put("version", "1.0.0");
 
-        ObjectNode responseNode = objectMapper.createObjectNode();
-        responseNode.put("jsonrpc", "2.0");
-        responseNode.put("id", id);
+        ObjectNode responseNode = baseResponse(id);
         responseNode.set("result", resultNode);
         return responseNode;
     }
 
-    private JsonNode ping(int id) {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("jsonrpc", "2.0");
-        response.put("id", id);
+    private JsonNode ping(JsonNode id) {
+        ObjectNode response = baseResponse(id);
         response.putObject("result");
         return response;
     }
 
-    private JsonNode toolsList(int id) {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("jsonrpc", "2.0");
-        response.put("id", id);
+    private JsonNode toolsList(JsonNode id) {
+        ObjectNode response = baseResponse(id);
         var toolsArray = response.putObject("result").putArray("tools");
         tools.values().forEach(tool -> {
             ObjectNode toolNode = toolsArray.addObject();
@@ -230,7 +226,7 @@ public class McpServerController {
         return response;
     }
 
-    private JsonNode callTool(JsonNode params, int id) {
+    private JsonNode callTool(JsonNode params, JsonNode id) {
         String toolName = params.path("name").asText();
         JsonNode arguments = params.path("arguments");
 
@@ -248,9 +244,7 @@ public class McpServerController {
 
         try {
             String result = tool.function().execute(arguments);
-            ObjectNode response = objectMapper.createObjectNode();
-            response.put("jsonrpc", "2.0");
-            response.put("id", id);
+            ObjectNode response = baseResponse(id);
             response.putObject("result")
                     .withArray("content")
                     .addObject()
@@ -263,25 +257,29 @@ public class McpServerController {
         }
     }
 
-    private JsonNode resourcesList(int id) {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("jsonrpc", "2.0");
-        response.put("id", id);
+    private JsonNode resourcesList(JsonNode id) {
+        ObjectNode response = baseResponse(id);
         response.putObject("result").putArray("resources");
         return response;
     }
 
-    private JsonNode resourceRead(JsonNode params, int id) {
+    private JsonNode resourceRead(JsonNode params, JsonNode id) {
         return errorResponse(id, -32602, "Recursos no soportados por este servidor");
     }
 
-    private JsonNode errorResponse(int id, int code, String message) {
-        ObjectNode response = objectMapper.createObjectNode();
-        response.put("jsonrpc", "2.0");
-        response.put("id", id);
+    private JsonNode errorResponse(JsonNode id, int code, String message) {
+        ObjectNode response = baseResponse(id);
         ObjectNode error = response.putObject("error");
         error.put("code", code);
         error.put("message", message);
+        return response;
+    }
+
+    /** Respuesta JSON-RPC con el id original (número, cadena o nulo) y el jsonrpc ya rellenados. */
+    private ObjectNode baseResponse(JsonNode id) {
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("jsonrpc", "2.0");
+        response.set("id", id == null || id.isMissingNode() ? NullNode.getInstance() : id);
         return response;
     }
 

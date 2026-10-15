@@ -63,46 +63,51 @@ public class BulkUploadStatusTracker {
 
     public void setTotalFiles(String uploadId, int totalFiles) {
         BulkUploadStatusDto status = uploads.get(uploadId);
-        if (status != null) {
+        if (status == null) return;
+        // La carga masiva procesa los archivos en paralelo: cada mutación se serializa sobre el
+        // propio DTO para evitar actualizaciones perdidas (p. ej. dos contadores a la vez).
+        synchronized (status) {
             status.setTotalFiles(totalFiles);
             status.setPendingFiles(totalFiles);
             recalculatePercentages(status);
-            notifyListeners(uploadId);
         }
+        notifyListeners(uploadId);
     }
 
     public void setStatus(String uploadId, String newStatus) {
         BulkUploadStatusDto status = uploads.get(uploadId);
-        if (status != null) {
+        if (status == null) return;
+        synchronized (status) {
             status.setStatus(newStatus);
-            notifyListeners(uploadId);
         }
+        notifyListeners(uploadId);
     }
 
     public void incrementProcessed(String uploadId, boolean success) {
         BulkUploadStatusDto status = uploads.get(uploadId);
-        if (status != null) {
+        if (status == null) return;
+        synchronized (status) {
             status.setProcessedFiles(status.getProcessedFiles() + 1);
-            status.setPendingFiles(status.getTotalFiles() - status.getProcessedFiles());
+            status.setPendingFiles(Math.max(0, status.getTotalFiles() - status.getProcessedFiles()));
             if (success) {
                 status.setSuccessCount(status.getSuccessCount() + 1);
             } else {
                 status.setErrorCount(status.getErrorCount() + 1);
             }
             recalculatePercentages(status);
-            notifyListeners(uploadId);
         }
+        notifyListeners(uploadId);
     }
 
     public void addError(String uploadId, String fileName, String errorMessage) {
         BulkUploadStatusDto status = uploads.get(uploadId);
-        if (status != null) {
-            status.getErrors().add(FileErrorDto.builder()
-                    .fileName(fileName)
-                    .errorMessage(errorMessage)
-                    .build());
-            notifyListeners(uploadId);
-        }
+        if (status == null) return;
+        // La lista de errores es CopyOnWriteArrayList (thread-safe).
+        status.getErrors().add(FileErrorDto.builder()
+                .fileName(fileName)
+                .errorMessage(errorMessage)
+                .build());
+        notifyListeners(uploadId);
     }
 
     public BulkUploadStatusDto getStatus(String uploadId) {

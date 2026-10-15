@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,12 +49,7 @@ public class GeoService {
         GeoJsonDto.GeoJsonFeature feature = GeoJsonDto.GeoJsonFeature.builder()
                 .type("Feature")
                 .geometry(geometry)
-                .properties(Map.of(
-                        "id", activity.getId(),
-                        "name", activity.getName(),
-                        "startTime", activity.getStartTime().toString(),
-                        "distanceMeters", activity.getDistanceMeters()
-                ))
+                .properties(buildProperties(activity))
                 .build();
 
         return GeoJsonDto.builder()
@@ -73,11 +69,13 @@ public class GeoService {
         gpx.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         gpx.append("<gpx version=\"1.1\" creator=\"Running API\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n");
         gpx.append("  <metadata>\n");
-        gpx.append("    <name>").append(activity.getName()).append("</name>\n");
-        gpx.append("    <time>").append(activity.getStartTime()).append("Z</time>\n");
+        gpx.append("    <name>").append(escapeXml(activity.getName())).append("</name>\n");
+        if (activity.getStartTime() != null) {
+            gpx.append("    <time>").append(activity.getStartTime()).append("Z</time>\n");
+        }
         gpx.append("  </metadata>\n");
         gpx.append("  <trk>\n");
-        gpx.append("    <name>").append(activity.getName()).append("</name>\n");
+        gpx.append("    <name>").append(escapeXml(activity.getName())).append("</name>\n");
         gpx.append("    <trkseg>\n");
 
         for (ActivityTrackpoint pt : trackpoints) {
@@ -86,7 +84,9 @@ public class GeoService {
                 if (pt.getAltitudeMeters() != null) {
                     gpx.append(String.format(Locale.US, "        <ele>%.2f</ele>\n", pt.getAltitudeMeters()));
                 }
-                gpx.append("        <time>").append(pt.getTimestamp()).append("Z</time>\n");
+                if (pt.getTimestamp() != null) {
+                    gpx.append("        <time>").append(pt.getTimestamp()).append("Z</time>\n");
+                }
                 gpx.append("      </trkpt>\n");
             }
         }
@@ -96,5 +96,35 @@ public class GeoService {
         gpx.append("</gpx>");
 
         return gpx.toString();
+    }
+
+    private Map<String, Object> buildProperties(Activity activity) {
+        // LinkedHashMap en lugar de Map.of: los valores pueden ser nulos (Map.of los rechaza).
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("id", activity.getId());
+        properties.put("name", activity.getName());
+        properties.put("startTime", activity.getStartTime() != null ? activity.getStartTime().toString() : null);
+        properties.put("distanceMeters", activity.getDistanceMeters());
+        return properties;
+    }
+
+    /** Escapa los caracteres reservados de XML para que nombres con {@code &}, {@code <}, etc. sean válidos. */
+    static String escapeXml(String value) {
+        if (value == null) {
+            return "";
+        }
+        StringBuilder escaped = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '&' -> escaped.append("&amp;");
+                case '<' -> escaped.append("&lt;");
+                case '>' -> escaped.append("&gt;");
+                case '"' -> escaped.append("&quot;");
+                case '\'' -> escaped.append("&apos;");
+                default -> escaped.append(c);
+            }
+        }
+        return escaped.toString();
     }
 }

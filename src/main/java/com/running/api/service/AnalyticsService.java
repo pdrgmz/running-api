@@ -16,11 +16,14 @@ import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.projection.DailyTrimpProjection;
+import com.running.api.util.DistanceSeries;
 import com.running.api.util.ElevationAccumulator;
+import com.running.api.util.RunningMetrics;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -34,7 +37,6 @@ public class AnalyticsService {
     private static final int RESTING_HEART_RATE = 60;
     private static final double ELEVATION_NOISE_THRESHOLD = 0.01;
     private static final double MIN_VALID_SPEED = 1.5;
-    private static final double MAX_VALID_SPEED = 15.0;
     private static final double MIN_VO2MAX = 20.0;
     private static final double MAX_VO2MAX = 85.0;
     private static final double DEFAULT_VO2MAX = 35.0;
@@ -59,15 +61,16 @@ public class AnalyticsService {
 
         if (points.isEmpty()) return splits;
 
+        // Distancia saneada por punto: evita que un salto corrupto del dispositivo cree un km fantasma.
+        double[] distances = DistanceSeries.reconstructPerPoint(points, RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS);
+
         int currentKm = 1;
         double targetMeters = 1000.0;
         int startIndex = 0;
 
         for (int i = 0; i < points.size(); i++) {
-            ActivityTrackpoint pt = points.get(i);
-
-            if (pt.getDistanceMeters() != null && pt.getDistanceMeters() >= targetMeters) {
-                splits.add(buildSplitDto(currentKm, points.subList(startIndex, i + 1)));
+            if (distances[i] >= targetMeters) {
+                splits.add(buildSplitDto(currentKm, points, distances, startIndex, i));
                 currentKm++;
                 targetMeters += 1000.0;
                 startIndex = i;
@@ -75,29 +78,30 @@ public class AnalyticsService {
         }
 
         if (startIndex < points.size() - 1) {
-            splits.add(buildSplitDto(currentKm, points.subList(startIndex, points.size())));
+            splits.add(buildSplitDto(currentKm, points, distances, startIndex, points.size() - 1));
         }
 
         return splits;
     }
 
-    private SplitDto buildSplitDto(int km, List<ActivityTrackpoint> segment) {
-        double startDist = segment.get(0).getDistanceMeters();
-        double endDist = segment.get(segment.size() - 1).getDistanceMeters();
-        double distMeters = endDist - startDist;
+    private SplitDto buildSplitDto(int km, List<ActivityTrackpoint> points, double[] distances, int from, int to) {
+        double distMeters = distances[to] - distances[from];
 
-        long timeSeconds = java.time.Duration.between(
-                segment.get(0).getTimestamp(),
-                segment.get(segment.size() - 1).getTimestamp()
-        ).getSeconds();
+        ActivityTrackpoint first = points.get(from);
+        ActivityTrackpoint last = points.get(to);
+        long timeSeconds = 0;
+        if (first.getTimestamp() != null && last.getTimestamp() != null) {
+            timeSeconds = Duration.between(first.getTimestamp(), last.getTimestamp()).getSeconds();
+        }
 
         double avgSpeed = timeSeconds > 0 ? distMeters / timeSeconds : 0.0;
         double paceMinPerKm = avgSpeed > 0 ? (1000.0 / (avgSpeed * 60.0)) : 0.0;
 
         int sumHr = 0, countHr = 0;
-        for (ActivityTrackpoint pt : segment) {
-            if (pt.getHeartRate() != null && pt.getHeartRate() > 0) {
-                sumHr += pt.getHeartRate();
+        for (int i = from; i <= to; i++) {
+            Integer hr = points.get(i).getHeartRate();
+            if (hr != null && hr > 0) {
+                sumHr += hr;
                 countHr++;
             }
         }
@@ -181,8 +185,14 @@ public class AnalyticsService {
 
     private double calculateHalfRatio(List<ActivityTrackpoint> segment) {
         if (segment.isEmpty()) return 0.0;
-        double totalDist = segment.get(segment.size() - 1).getDistanceMeters() - segment.get(0).getDistanceMeters();
-        long timeSec = java.time.Duration.between(segment.get(0).getTimestamp(), segment.get(segment.size() - 1).getTimestamp()).getSeconds();
+
+        ActivityTrackpoint first = segment.get(0);
+        ActivityTrackpoint last = segment.get(segment.size() - 1);
+        if (first.getTimestamp() == null || last.getTimestamp() == null) return 0.0;
+
+        double[] distances = DistanceSeries.reconstructPerPoint(segment, RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS);
+        double totalDist = distances[distances.length - 1] - distances[0];
+        long timeSec = Duration.between(first.getTimestamp(), last.getTimestamp()).getSeconds();
         double avgSpeed = timeSec > 0 ? totalDist / timeSec : 0.0;
 
         int sumHr = 0, countHr = 0;
@@ -218,7 +228,7 @@ public class AnalyticsService {
                 if (pt.getHeartRate() != null && pt.getHeartRate() > 0) {
                     double dtSec = 1.0;
                     if (prevPt != null && prevPt.getTimestamp() != null && pt.getTimestamp() != null) {
-                        long diff = java.time.Duration.between(prevPt.getTimestamp(), pt.getTimestamp()).getSeconds();
+                        long diff = Duration.between(prevPt.getTimestamp(), pt.getTimestamp()).getSeconds();
                         if (diff > 0 && diff < 30) dtSec = diff;
                     }
                     totalSecondsWithHr += dtSec;
@@ -289,7 +299,8 @@ public class AnalyticsService {
             for (ActivityTrackpoint pt : trackpoints) {
                 Double speed = pt.getSpeed();
                 Integer hr = pt.getHeartRate();
-                if (speed != null && speed > MIN_VALID_SPEED && speed < MAX_VALID_SPEED && hr != null && hr > (restHr + 30)) {
+                if (speed != null && speed > MIN_VALID_SPEED && speed < RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS
+                        && hr != null && hr > (restHr + 30)) {
                     double speedMPerMin = speed * 60.0;
                     double vo2Cost = (speedMPerMin * 0.2) + 3.5;
                     double fractionHrr = Math.max(0.2, Math.min(1.0, (double) (hr - restHr) / (maxHr - restHr)));
