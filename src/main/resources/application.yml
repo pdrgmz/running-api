@@ -15,21 +15,16 @@ spring:
       idle-timeout: 300000
       max-lifetime: 600000
       leak-detection-threshold: 60000
-      initialization-fail-timeout: -1
-      connection-test-query: SELECT 1
     
   jpa:
     hibernate:
       ddl-auto: update
-      dialect: org.hibernate.dialect.PostgreSQLDialect
     show-sql: false
-    database-platform: org.hibernate.dialect.PostgreSQLDialect
     properties:
       hibernate:
         format_sql: false
         jdbc:
           batch_size: 500
-        dialect: org.hibernate.dialect.PostgreSQLDialect
   servlet:
     multipart:
       max-file-size: 50MB
@@ -68,12 +63,6 @@ management:
     tags:
       application: running-api
       environment: ${ENV:local}
-
-# MCP Server
-mcp:
-  server:
-    enabled: true
-    path: /mcp
 
 
 #logging:

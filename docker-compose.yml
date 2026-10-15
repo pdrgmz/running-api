@@ -17,13 +17,11 @@ services:
     volumes:
       - storage_data:/app/storage
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     networks:
       - monitoring
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -42,12 +40,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - monitoring
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U runninging -d running_api"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # --- Prometheus ---
   prometheus:
@@ -65,7 +57,6 @@ services:
       - '--web.enable-lifecycle'
     networks:
       - monitoring
-    restart: unless-stopped
 
   # --- Grafana ---
   grafana:
@@ -85,7 +76,6 @@ services:
       - prometheus
     networks:
       - monitoring
-    restart: unless-stopped
 
 volumes:
   storage_data:
