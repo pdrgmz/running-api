@@ -114,4 +114,63 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Perfil de calidad de código. NO está activo por defecto para que el build
+            funcione sin conexión (los plugins se descargan la primera vez que se usan).
+            Uso:
+              mvn -Pquality spotless:apply   # aplica orden de imports y limpia espacios
+              mvn -Pquality verify           # verifica formato (Spotless) + Checkstyle
+            Nota: la primera ejecución requiere acceso al repositorio Maven.
+        -->
+        <profile>
+            <id>quality</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>com.diffplug.spotless</groupId>
+                        <artifactId>spotless-maven-plugin</artifactId>
+                        <version>2.43.0</version>
+                        <configuration>
+                            <java>
+                                <removeUnusedImports />
+                                <importOrder />
+                                <trimTrailingWhitespace />
+                                <endWithNewline />
+                            </java>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>spotless-check</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-checkstyle-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <configuration>
+                            <configLocation>config/checkstyle/checkstyle.xml</configLocation>
+                            <consoleOutput>true</consoleOutput>
+                            <failOnViolation>false</failOnViolation>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>checkstyle-check</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

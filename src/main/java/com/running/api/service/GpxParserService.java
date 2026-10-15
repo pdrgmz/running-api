@@ -5,6 +5,9 @@ import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.fasterxml.jackson.dataformat.xml.deser.FromXmlParser;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
+import com.running.api.util.ElevationAccumulator;
+import com.running.api.util.GeoUtils;
+import com.running.api.util.RunningMetrics;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -19,12 +22,10 @@ import java.util.List;
 @RequiredArgsConstructor
 public class GpxParserService {
 
-    private static final double NO_DATA_ALTITUDE = -999.0;
+    private static final double NO_DATA_ALTITUDE = ElevationAccumulator.NO_DATA;
     private static final double ELEVATION_NOISE_THRESHOLD = 0.01;
     private static final double MAX_VALID_SPEED = 20.0;
     private static final double HAVERSINE_MAX_DELTA = 100.0;
-    private static final double EARTH_RADIUS_METERS = 6371000.0;
-    private static final double MIN_VALID_SPEED_FOR_VO2 = 1.0; // m/s
 
     private final XmlMapper xmlMapper = new XmlMapper();
     private final AnalyticsService analyticsService;
@@ -76,9 +77,7 @@ public class GpxParserService {
                 .startTime(startTime)
                 .build();
 
-        double prevAlt = NO_DATA_ALTITUDE;
-        double elevationGain = 0.0;
-        double elevationLoss = 0.0;
+        ElevationAccumulator elevation = new ElevationAccumulator(ELEVATION_NOISE_THRESHOLD);
         double runningTotalDistance = 0.0;
         ActivityTrackpoint prevPoint = null;
 
@@ -113,19 +112,7 @@ public class GpxParserService {
             Double lon = lonNode != null ? lonNode.asDouble() : null;
 
             double alt = extractAltitude(tp);
-
-            if (alt != NO_DATA_ALTITUDE) {
-                if (prevAlt != NO_DATA_ALTITUDE) {
-                    double diff = alt - prevAlt;
-                    if (Math.abs(diff) > ELEVATION_NOISE_THRESHOLD) {
-                        if (diff > 0) elevationGain += diff;
-                        else elevationLoss += Math.abs(diff);
-                        prevAlt = alt;
-                    }
-                } else {
-                    prevAlt = alt;
-                }
-            }
+            elevation.add(alt);
 
             int hr = extractHeartRate(tp);
             int cadence = extractCadence(tp);
@@ -147,7 +134,7 @@ public class GpxParserService {
             // Calcular distancia con Haversine si no hay campo distance
             if (lat != null && lon != null && prevPoint != null
                     && prevPoint.getLatitude() != null && prevPoint.getLongitude() != null) {
-                double delta = calculateHaversineDistance(
+                double delta = GeoUtils.haversineMeters(
                         prevPoint.getLatitude(), prevPoint.getLongitude(), lat, lon);
                 if (delta > 0 && delta < HAVERSINE_MAX_DELTA) {
                     runningTotalDistance += delta;
@@ -191,17 +178,15 @@ public class GpxParserService {
         activity.setAvgHeartRate(countHr > 0 ? (int) (sumHr / countHr) : null);
         activity.setAvgCadence(countCadence > 0 ? (int) Math.round((double) sumCadence / countCadence) : null);
         activity.setMaxCadence(maxCadence > 0 ? maxCadence : null);
-        activity.setElevationGain(elevationGain > 0 ? elevationGain : null);
-        activity.setElevationLoss(elevationLoss > 0 ? elevationLoss : null);
+        activity.setElevationGain(elevation.getGain() > 0 ? elevation.getGain() : null);
+        activity.setElevationLoss(elevation.getLoss() > 0 ? elevation.getLoss() : null);
 
-        // --- CÁLCULO DE TRAINING LOAD (TRIMP simplificado) ---
-        calculateTrainingLoad(activity, countHr, sumHr, maxHr);
-
-        // --- CÁLCULO DE VAM (Velocidad Aeróbica Máxima) ---
-        calculateVam(activity, calculatedMaxSpeed);
-
-        // --- CÁLCULO DE VO2MAX ESTIMADO ---
-        calculateVo2Max(activity, calculatedMaxSpeed);
+        // --- MÉTRICAS FISIOLÓGICAS (TRIMP, VAM, VO2Max) ---
+        double durationMin = activity.getTotalTimeSeconds() != null ? activity.getTotalTimeSeconds() / 60.0 : 0.0;
+        double hrAvg = countHr > 0 ? (double) sumHr / countHr : 0.0;
+        activity.setTrainingLoad(RunningMetrics.trainingLoad(durationMin, hrAvg, maxHr));
+        activity.setVamKmH(RunningMetrics.vamKmH(calculatedMaxSpeed, activity.getDistanceMeters(), activity.getElevationGain()));
+        activity.setVo2MaxEstimated(RunningMetrics.vo2Max(calculatedMaxSpeed));
 
         if (analyticsService != null) {
             analyticsService.populateMetrics(activity);
@@ -223,8 +208,8 @@ public class GpxParserService {
             if (trk == null) return false;
             JsonNode typeNode = findChild(trk, "type");
             if (typeNode == null) return false;
-            String type = typeNode.asText("").toLowerCase();
-            return type.contains("running") || type.contains("run") || type.contains("carrera");
+            String type = typeNode.asText("");
+            return RunningMetrics.isRunningSport(type);
         } catch (Exception e) {
             return false;
         }
@@ -283,66 +268,6 @@ public class GpxParserService {
             return java.time.Duration.between(first, last).getSeconds();
         }
         return 0.0;
-    }
-
-    private double calculateHaversineDistance(double lat1, double lon1, double lat2, double lon2) {
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLon = Math.toRadians(lon2 - lon1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return EARTH_RADIUS_METERS * c;
-    }
-
-    /**
-     * Training Load - TRIMP simplificado de Banister:
-     * TL = duración(min) * (HRavg / HRmax)
-     */
-    private void calculateTrainingLoad(Activity activity, int countHr, long sumHr, int maxHr) {
-        if (activity.getTotalTimeSeconds() != null && activity.getTotalTimeSeconds() > 0
-                && countHr > 0 && maxHr > 0) {
-            double durationMin = activity.getTotalTimeSeconds() / 60.0;
-            double hrAvg = (double) sumHr / countHr;
-            if (maxHr > hrAvg) {
-                double tl = durationMin * (hrAvg / maxHr);
-                activity.setTrainingLoad(Math.round(tl * 10.0) / 10.0);
-            }
-        }
-    }
-
-    /**
-     * VAM (Velocidad Aeróbica Máxima) - estimación desde velocidad máxima y pendiente.
-     */
-    private void calculateVam(Activity activity, double maxSpeedMs) {
-        if (maxSpeedMs > 0) {
-            double maxSpeedKmh = maxSpeedMs * 3.6;
-
-            double avgGradient = 0;
-            if (activity.getDistanceMeters() != null && activity.getDistanceMeters() > 0
-                    && activity.getElevationGain() != null && activity.getElevationGain() > 0) {
-                avgGradient = activity.getElevationGain() / activity.getDistanceMeters();
-            }
-
-            double vam = maxSpeedKmh * (1 + Math.max(avgGradient, 0) * 0.1);
-            activity.setVamKmH(Math.round(vam * 10.0) / 10.0);
-        }
-    }
-
-    /**
-     * VO2Max estimado usando la fórmula de Daniels-Gilbert:
-     * VO2 = -4.60 + 0.182258*v + 0.000104*v^2
-     * donde v = velocidad en m/min
-     */
-    private void calculateVo2Max(Activity activity, double maxSpeedMs) {
-        if (maxSpeedMs > MIN_VALID_SPEED_FOR_VO2) {
-            double v = maxSpeedMs * 60.0; // m/min
-            double vo2 = -4.60 + 0.182258 * v + 0.000104 * v * v;
-
-            if (vo2 > 20 && vo2 < 100) { // Rango fisiológico válido
-                activity.setVo2MaxEstimated(Math.round(vo2 * 10.0) / 10.0);
-            }
-        }
     }
 
     private double extractAltitude(JsonNode tp) {

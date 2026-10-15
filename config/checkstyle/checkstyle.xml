@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+    "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+    "https://checkstyle.org/dtds/configuration_1_3.dtd">
+
+<!--
+    Reglas mínimas y conservadoras. Se ejecutan con severity="warning" y el plugin
+    está configurado con failOnViolation=false, por lo que no rompen el build:
+    sirven como guía. Para hacerlas estrictas, cambia severity a "error" y
+    failOnViolation a true en el profile `quality` del pom.xml.
+-->
+<module name="Checker">
+    <property name="severity" value="warning" />
+    <property name="charset" value="UTF-8" />
+
+    <module name="TreeWalker">
+        <module name="UnusedImports" />
+        <module name="RedundantImport" />
+        <module name="EqualsHashCode" />
+        <module name="SimplifyBooleanExpression" />
+        <module name="EmptyBlock" />
+    </module>
+</module>

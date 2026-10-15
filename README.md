@@ -4,7 +4,7 @@
 
 ## Descripción
 
-**Running** es una aplicación backend construida con **Spring Boot 3.2** y **Java 17** que permite importar, almacenar y analizar actividades de carrera desde archivos **TCX**, **GPX** y **FIT** (formatos estándar de Garmin y otros dispositivos GPS). Ofrece métricas fisiológicas avanzadas, estadísticas acumuladas, récords personales y exportación geoespacial.
+**Running** es una aplicación backend construida con **Spring Boot 3.2** y **Java 21** que permite importar, almacenar y analizar actividades de carrera desde archivos **TCX**, **GPX** y **FIT** (formatos estándar de Garmin y otros dispositivos GPS). Ofrece métricas fisiológicas avanzadas, estadísticas acumuladas, récords personales y exportación geoespacial.
 
 ## Tabla de Contenidos
 
@@ -15,6 +15,7 @@
 - [Despliegue con Docker](#despliegue-con-docker)
 - [Endpoints](#endpoints)
 - [Modelos de Datos](#modelos-de-datos)
+- [Pruebas y Calidad de Código](#pruebas-y-calidad-de-código)
 - [Documentación de la API](#documentación-de-la-api)
 
 ---
@@ -143,6 +144,10 @@ src/main/java/com/running/api/
 │   ├── GpxParserService.java
 │   ├── StatsService.java
 │   └── TcxParserService.java
+├── util/
+│   ├── ElevationAccumulator.java # Desnivel D+/D- con histéresis (filtro de ruido)
+│   ├── GeoUtils.java             # Distancia Haversine
+│   └── RunningMetrics.java       # TRIMP / VAM / VO2Max / detección de deporte
 └── RunningApiApplication.java
 ```
 
@@ -353,6 +358,38 @@ Estadísticas globales acumuladas (fila única con `id=1`).
 | `totalElevationGain` | Double | Desnivel positivo total (m) |
 | `totalCalories` | Long | Calorías totales |
 | `maxHeartRateGlobal` | Integer | FC máxima histórica |
+
+---
+
+## Pruebas y Calidad de Código
+
+### Pruebas
+
+La carpeta `src/test/java` contiene pruebas unitarias (JUnit 5 + AssertJ) de las utilidades
+compartidas, los parsers GPX/TCX y el mapeador de FIT:
+
+```bash
+mvn test
+```
+
+Cubren, entre otros: cálculo Haversine, acumulación de desnivel con histéresis, métricas
+fisiológicas (TRIMP, VAM, VO2Max), detección de deporte y parseo de XML sintético GPX/TCX.
+
+### Calidad de código (opcional)
+
+El profile **`quality`** agrupa **Spotless** (organización de imports, eliminación de imports
+sin usar, espacios finales) y **Checkstyle**:
+
+```bash
+# Aplica formateo y orden de imports
+mvn -Pquality spotless:apply
+
+# Verifica formato y ejecuta Checkstyle (fase verify)
+mvn -Pquality verify
+```
+
+> No está activo por defecto para que `mvn compile`/`mvn test` funcionen sin conexión.
+> La primera ejecución del profile descarga los plugins desde el repositorio Maven.
 
 ---
 

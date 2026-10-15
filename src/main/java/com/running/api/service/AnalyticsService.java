@@ -16,6 +16,7 @@ import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.projection.DailyTrimpProjection;
+import com.running.api.util.ElevationAccumulator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -41,7 +42,6 @@ public class AnalyticsService {
     private static final double PMC_CTL_DAYS = 42.0;
     private static final double PMC_ATL_DAYS = 7.0;
     private static final int PMC_WARMUP_DAYS = 120;
-    private static final double NO_DATA_ALTITUDE = -999.0;
     private static final double VO2MAX_RECREATIONAL_THRESHOLD = 42.0;
 
     private final ActivityRepository activityRepository;
@@ -427,26 +427,15 @@ public class AnalyticsService {
 
         if ((activity.getElevationGain() == null || (activity.getElevationGain() == 0.0 && (activity.getElevationLoss() == null || activity.getElevationLoss() == 0.0)))
                 && points != null && !points.isEmpty()) {
-            double calcGain = 0.0;
-            double calcLoss = 0.0;
-            double prevAlt = NO_DATA_ALTITUDE;
+            ElevationAccumulator elevation = new ElevationAccumulator(ELEVATION_NOISE_THRESHOLD);
             for (ActivityTrackpoint pt : points) {
-                if (pt.getAltitudeMeters() != null && pt.getAltitudeMeters() != NO_DATA_ALTITUDE) {
-                    if (prevAlt != NO_DATA_ALTITUDE) {
-                        double diff = pt.getAltitudeMeters() - prevAlt;
-                        if (Math.abs(diff) > ELEVATION_NOISE_THRESHOLD) {
-                            if (diff > 0) calcGain += diff;
-                            else calcLoss += Math.abs(diff);
-                            prevAlt = pt.getAltitudeMeters();
-                        }
-                    } else {
-                        prevAlt = pt.getAltitudeMeters();
-                    }
+                if (pt.getAltitudeMeters() != null) {
+                    elevation.add(pt.getAltitudeMeters());
                 }
             }
-            if (calcGain > 0.0 || calcLoss > 0.0) {
-                activity.setElevationGain(Math.round(calcGain * 10.0) / 10.0);
-                activity.setElevationLoss(Math.round(calcLoss * 10.0) / 10.0);
+            if (elevation.getGain() > 0.0 || elevation.getLoss() > 0.0) {
+                activity.setElevationGain(Math.round(elevation.getGain() * 10.0) / 10.0);
+                activity.setElevationLoss(Math.round(elevation.getLoss() * 10.0) / 10.0);
                 modified = true;
             }
         }

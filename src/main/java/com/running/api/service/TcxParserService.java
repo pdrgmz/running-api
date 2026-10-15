@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
+import com.running.api.util.ElevationAccumulator;
+import com.running.api.util.GeoUtils;
+import com.running.api.util.RunningMetrics;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -17,10 +20,9 @@ import java.time.ZonedDateTime;
 @RequiredArgsConstructor
 public class TcxParserService {
 
-    private static final double NO_DATA_ALTITUDE = -999.0;
+    private static final double NO_DATA_ALTITUDE = ElevationAccumulator.NO_DATA;
     private static final double MAX_VALID_SPEED = 20.0;
     private static final double HAVERSINE_MAX_DELTA = 100.0;
-    private static final double EARTH_RADIUS_METERS = 6371000.0;
 
     private final XmlMapper xmlMapper = new XmlMapper();
     private final AnalyticsService analyticsService;
@@ -61,9 +63,7 @@ public class TcxParserService {
             laps = xmlMapper.createArrayNode().add(laps);
         }
 
-        double prevAlt = NO_DATA_ALTITUDE;
-        double elevationGain = 0.0;
-        double elevationLoss = 0.0;
+        ElevationAccumulator elevation = new ElevationAccumulator(elevationThreshold);
 
         double runningTotalDistance = 0.0;
         ActivityTrackpoint prevPoint = null;
@@ -98,7 +98,7 @@ public class TcxParserService {
                     runningTotalDistance = rawDistance;
                 } else if (lat != null && lon != null && prevPoint != null
                            && prevPoint.getLatitude() != null && prevPoint.getLongitude() != null) {
-                    double deltaMeters = calculateHaversineDistance(
+                    double deltaMeters = GeoUtils.haversineMeters(
                         prevPoint.getLatitude(), prevPoint.getLongitude(),
                         lat, lon
                     );
@@ -109,19 +109,7 @@ public class TcxParserService {
                 }
 
                 double alt = extractAltitude(tp);
-
-                if (alt != NO_DATA_ALTITUDE) {
-                    if (prevAlt != NO_DATA_ALTITUDE) {
-                        double diff = alt - prevAlt;
-                        if (Math.abs(diff) > elevationThreshold) {
-                            if (diff > 0) elevationGain += diff;
-                            else elevationLoss += Math.abs(diff);
-                            prevAlt = alt;
-                        }
-                    } else {
-                        prevAlt = alt;
-                    }
-                }
+                elevation.add(alt);
 
                 int hr = tp.path("HeartRateBpm").path("Value").asInt(0);
                 int cadence = tp.path("Cadence").asInt(0);
@@ -177,8 +165,8 @@ public class TcxParserService {
         activity.setAvgCadence(countCadence > 0 ? (int) Math.round((double) sumCadence / countCadence) : null);
         activity.setMaxCadence(maxCadence > 0 ? maxCadence : null);
         activity.setTotalCalories(totalCalories);
-        activity.setElevationGain(elevationGain);
-        activity.setElevationLoss(elevationLoss);
+        activity.setElevationGain(elevation.getGain());
+        activity.setElevationLoss(elevation.getLoss());
 
         if (analyticsService != null) {
             analyticsService.populateMetrics(activity);
@@ -198,19 +186,6 @@ public class TcxParserService {
         return speedNode.asDouble(0.0);
     }
 
-    private double calculateHaversineDistance(double lat1, double lon1, double lat2, double lon2) {
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLon = Math.toRadians(lon2 - lon1);
-
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                   Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                   Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-        return EARTH_RADIUS_METERS * c;
-    }
-
     /**
      * Detecta si la actividad es una carrera basándose en el atributo Sport del elemento Activity.
      * @return true si es Running, false si es otro deporte (Biking, Swimming, etc.)
@@ -220,8 +195,8 @@ public class TcxParserService {
             JsonNode root = new XmlMapper().readTree(inputStream);
             JsonNode activityNode = root.path("Activities").path("Activity");
             if (activityNode.isMissingNode()) return false;
-            String sport = activityNode.path("Sport").asText("").toLowerCase();
-            return sport.contains("running") || sport.contains("run");
+            String sport = activityNode.path("Sport").asText("");
+            return RunningMetrics.isRunningSport(sport);
         } catch (Exception e) {
             return false;
         }

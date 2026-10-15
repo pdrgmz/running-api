@@ -13,6 +13,9 @@ import com.garmin.fit.SportMesgListener;
 import com.running.api.dto.FitActivityDTO;
 import com.running.api.mapper.ActivityMapper;
 import com.running.api.model.Activity;
+import com.running.api.util.ElevationAccumulator;
+import com.running.api.util.GeoUtils;
+import com.running.api.util.RunningMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,7 +32,6 @@ public class FitParserService {
     private final ActivityMapper activityMapper;
 
     private static final double SEMICIRCLES_TO_DEGREES = 180.0 / Math.pow(2, 31);
-    private static final double EARTH_RADIUS_METERS = 6371000.0;
     private static final double ELEVATION_NOISE_THRESHOLD = 0.5; // metros
 
     /**
@@ -46,9 +48,7 @@ public class FitParserService {
         final Double[] prevLat = { null };
         final Double[] prevLon = { null };
         final double[] accumulatedHaversineDistance = { 0.0 };
-        final Double[] prevAltitude = { null };
-        final double[] elevationGain = { 0.0 };
-        final double[] elevationLoss = { 0.0 };
+        final ElevationAccumulator elevation = new ElevationAccumulator(ELEVATION_NOISE_THRESHOLD);
         final int[] messageCount = { 0 };
 
         // 1. Sport Listener - detecta el deporte
@@ -109,7 +109,7 @@ public class FitParserService {
 
             if (point.getLatitude() != null && point.getLongitude() != null) {
                 if (prevLat[0] != null && prevLon[0] != null) {
-                    double delta = calculateHaversineDistance(
+                    double delta = GeoUtils.haversineMeters(
                             prevLat[0], prevLon[0],
                             point.getLatitude(), point.getLongitude()
                     );
@@ -135,15 +135,7 @@ public class FitParserService {
             }
 
             if (point.getAltitudeMeters() != null) {
-                if (prevAltitude[0] != null) {
-                    double diff = point.getAltitudeMeters() - prevAltitude[0];
-                    if (diff > ELEVATION_NOISE_THRESHOLD) {
-                        elevationGain[0] += diff;
-                    } else if (diff < -ELEVATION_NOISE_THRESHOLD) {
-                        elevationLoss[0] += Math.abs(diff);
-                    }
-                }
-                prevAltitude[0] = point.getAltitudeMeters();
+                elevation.add(point.getAltitudeMeters());
             }
 
             if (mesg.getDistance() != null) {
@@ -163,8 +155,7 @@ public class FitParserService {
 
         // Validar que sea una carrera
         String sport = detectedSport[0];
-        boolean isRunning = "running".equals(sport) || "trail_running".equals(sport);
-        if (!isRunning) {
+        if (!RunningMetrics.isRunningSport(sport)) {
             log.warn("Archivo FIT rechazado. Sport detectado: {} (mensajes procesados: {})",
                     sport, messageCount[0]);
             throw new IllegalArgumentException(
@@ -173,21 +164,36 @@ public class FitParserService {
         }
 
         // Asignar elevation gain y loss calculados
-        if (elevationGain[0] > 0) {
-            activityDTO.setElevationGain(elevationGain[0]);
+        if (elevation.getGain() > 0) {
+            activityDTO.setElevationGain(elevation.getGain());
         }
-        if (elevationLoss[0] > 0) {
-            activityDTO.setElevationLoss(elevationLoss[0]);
+        if (elevation.getLoss() > 0) {
+            activityDTO.setElevationLoss(elevation.getLoss());
         }
 
-        // --- CÁLCULO DE TRAINING LOAD (TRIMP simplificado) ---
-        calculateTrainingLoad(activityDTO);
+        // --- MÉTRICAS FISIOLÓGICAS (TRIMP, VAM, VO2Max) ---
+        double hrAvg = activityDTO.getTrackPoints().stream()
+                .filter(tp -> tp.getHeartRate() != null && tp.getHeartRate() > 0)
+                .mapToInt(FitActivityDTO.TrackPoint::getHeartRate)
+                .average()
+                .orElse(0);
+        int hrMax = activityDTO.getTrackPoints().stream()
+                .filter(tp -> tp.getHeartRate() != null && tp.getHeartRate() > 0)
+                .mapToInt(FitActivityDTO.TrackPoint::getHeartRate)
+                .max()
+                .orElse(0);
+        double maxSpeedMs = activityDTO.getTrackPoints().stream()
+                .filter(tp -> tp.getSpeed() != null && tp.getSpeed() > 0)
+                .mapToDouble(FitActivityDTO.TrackPoint::getSpeed)
+                .max()
+                .orElse(0);
+        double durationMin = activityDTO.getTotalTimerTimeSeconds() != null
+                ? activityDTO.getTotalTimerTimeSeconds() / 60.0 : 0.0;
 
-        // --- CÁLCULO DE VAM (Velocidad Aeróbica Máxima) ---
-        calculateVam(activityDTO);
-
-        // --- CÁLCULO DE VO2MAX ESTIMADO ---
-        calculateVo2Max(activityDTO);
+        activityDTO.setTrainingLoad(RunningMetrics.trainingLoad(durationMin, hrAvg, hrMax));
+        activityDTO.setVamKmH(RunningMetrics.vamKmH(maxSpeedMs,
+                activityDTO.getTotalDistanceMeters(), activityDTO.getElevationGain()));
+        activityDTO.setVo2MaxEstimated(RunningMetrics.vo2Max(maxSpeedMs));
 
         return activityMapper.toEntity(activityDTO, "");
     }
@@ -228,7 +234,7 @@ public class FitParserService {
         }
 
         boolean isRunning() {
-            return "running".equals(sport) || "trail_running".equals(sport);
+            return RunningMetrics.isRunningSport(sport);
         }
     }
 
@@ -237,76 +243,5 @@ public class FitParserService {
                 .toInstant()
                 .atZone(ZoneOffset.UTC)
                 .toLocalDateTime();
-    }
-
-    private void calculateTrainingLoad(FitActivityDTO dto) {
-        if (dto.getTotalTimerTimeSeconds() != null && dto.getTotalTimerTimeSeconds() > 0) {
-            double durationMin = dto.getTotalTimerTimeSeconds() / 60.0;
-
-            double hrAvg = dto.getTrackPoints().stream()
-                    .filter(tp -> tp.getHeartRate() != null && tp.getHeartRate() > 0)
-                    .mapToInt(FitActivityDTO.TrackPoint::getHeartRate)
-                    .average()
-                    .orElse(0);
-
-            int hrMax = dto.getTrackPoints().stream()
-                    .filter(tp -> tp.getHeartRate() != null && tp.getHeartRate() > 0)
-                    .mapToInt(FitActivityDTO.TrackPoint::getHeartRate)
-                    .max()
-                    .orElse(0);
-
-            if (hrAvg > 0 && hrMax > 0 && hrMax > hrAvg) {
-                double tl = durationMin * (hrAvg / hrMax);
-                dto.setTrainingLoad(Math.round(tl * 10.0) / 10.0);
-            }
-        }
-    }
-
-    private void calculateVam(FitActivityDTO dto) {
-        double maxSpeedMs = dto.getTrackPoints().stream()
-                .filter(tp -> tp.getSpeed() != null && tp.getSpeed() > 0)
-                .mapToDouble(FitActivityDTO.TrackPoint::getSpeed)
-                .max()
-                .orElse(0);
-
-        if (maxSpeedMs > 0) {
-            double maxSpeedKmh = maxSpeedMs * 3.6;
-
-            double avgGradient = 0;
-            if (dto.getTotalDistanceMeters() != null && dto.getTotalDistanceMeters() > 0
-                    && dto.getElevationGain() != null && dto.getElevationGain() > 0) {
-                avgGradient = dto.getElevationGain() / dto.getTotalDistanceMeters();
-            }
-
-            double vam = maxSpeedKmh * (1 + Math.max(avgGradient, 0) * 0.1);
-            dto.setVamKmH(Math.round(vam * 10.0) / 10.0);
-        }
-    }
-
-    private void calculateVo2Max(FitActivityDTO dto) {
-        double maxSpeedMs = dto.getTrackPoints().stream()
-                .filter(tp -> tp.getSpeed() != null && tp.getSpeed() > 0)
-                .mapToDouble(FitActivityDTO.TrackPoint::getSpeed)
-                .max()
-                .orElse(0);
-
-        if (maxSpeedMs > 1.0) {
-            double v = maxSpeedMs * 60.0;
-            double vo2 = -4.60 + 0.182258 * v + 0.000104 * v * v;
-
-            if (vo2 > 20 && vo2 < 100) {
-                dto.setVo2MaxEstimated(Math.round(vo2 * 10.0) / 10.0);
-            }
-        }
-    }
-
-    private double calculateHaversineDistance(double lat1, double lon1, double lat2, double lon2) {
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLon = Math.toRadians(lon2 - lon1);
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                   Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                   Math.sin(dLon / 2) * Math.sin(dLon / 2);
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        return EARTH_RADIUS_METERS * c;
     }
 }
