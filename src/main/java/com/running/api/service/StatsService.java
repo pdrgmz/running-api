@@ -200,25 +200,99 @@ public class StatsService {
         }).toList();
     }
 
-    private Double findFastestSegment(List<ActivityTrackpoint> points, double targetMeters) {
-        Double minTimeSec = null;
+    /**
+     * Velocidad máxima físicamente plausible (m/s) para una carrera. Cualquier incremento de
+     * distancia que implique superarla se considera un glitch del sensor (p. ej. saltos de varios
+     * kilómetros en un segundo) y se descarta. 15 m/s ≈ 54 km/h, muy por encima de cualquier marca
+     * real, por lo que no altera la telemetría válida.
+     */
+    private static final double MAX_PLAUSIBLE_SPEED_MPS = 15.0;
 
-        for (int left = 0; left < points.size(); left++) {
-            ActivityTrackpoint startPt = points.get(left);
-            if (startPt.getDistanceMeters() == null) continue;
+    /**
+     * Devuelve el menor tiempo (segundos, con precisión sub-muestra) necesario para cubrir
+     * {@code targetMeters} dentro de la serie de puntos, o {@code null} si no hay datos suficientes.
+     * <p>
+     * La distancia acumulada se reconstruye antes como una serie monótona y físicamente plausible:
+     * se suman los incrementos entre muestras consecutivas descartando los negativos (reinicios del
+     * contador) y los que implican una velocidad superior a {@link #MAX_PLAUSIBLE_SPEED_MPS}
+     * (saltos/glitches del sensor). Así, un único punto corrupto no puede producir un tramo
+     * artificialmente rápido.
+     * <p>
+     * Sobre la serie reconstruida se usa una ventana deslizante monótona: como la distancia es
+     * creciente, el extremo derecho mínimo para un inicio dado también crece, por lo que el coste
+     * total es O(n) en lugar de O(n²). El instante final se interpola entre las dos muestras que
+     * rodean la distancia objetivo, de forma que el tramo mide exactamente {@code targetMeters}
+     * (sin sobrepasarlo).
+     */
+    Double findFastestSegment(List<ActivityTrackpoint> points, double targetMeters) {
+        // 1. Reconstruir una serie de distancia monótona y plausible a partir de las muestras.
+        int n = points.size();
+        double[] distance = new double[n];
+        double[] timeSeconds = new double[n];
+        int count = 0;
 
-            for (int right = left + 1; right < points.size(); right++) {
-                ActivityTrackpoint endPt = points.get(right);
-                if (endPt.getDistanceMeters() == null) continue;
+        LocalDateTime base = null;
+        double accumulatedDistance = 0.0;
+        double previousRawDistance = 0.0;
+        double previousTime = 0.0;
 
-                double distDiff = endPt.getDistanceMeters() - startPt.getDistanceMeters();
-                if (distDiff >= targetMeters) {
-                    long duration = Duration.between(startPt.getTimestamp(), endPt.getTimestamp()).getSeconds();
-                    if (duration > 0 && (minTimeSec == null || duration < minTimeSec)) {
-                        minTimeSec = (double) duration;
-                    }
-                    break;
+        for (ActivityTrackpoint point : points) {
+            if (point.getDistanceMeters() == null || point.getTimestamp() == null) continue;
+
+            double rawDistance = point.getDistanceMeters();
+            double time;
+            if (count == 0) {
+                base = point.getTimestamp();
+                time = 0.0;
+                accumulatedDistance = rawDistance;
+            } else {
+                time = Duration.between(base, point.getTimestamp()).toNanos() / 1_000_000_000.0;
+                double deltaTime = time - previousTime;
+                double increment = rawDistance - previousRawDistance;
+
+                if (increment < 0) {
+                    increment = 0.0; // el contador acumulado no puede retroceder
                 }
+                double maxIncrement = MAX_PLAUSIBLE_SPEED_MPS * deltaTime;
+                if (increment > maxIncrement) {
+                    increment = 0.0; // salto imposible: se descarta el incremento corrupto
+                }
+                accumulatedDistance += increment;
+            }
+
+            distance[count] = accumulatedDistance;
+            timeSeconds[count] = time;
+            previousRawDistance = rawDistance;
+            previousTime = time;
+            count++;
+        }
+        if (count < 2) return null;
+
+        // 2. Ventana deslizante: 'right' solo avanza, nunca retrocede.
+        Double minTimeSec = null;
+        int right = 1;
+
+        for (int left = 0; left < count; left++) {
+            if (right <= left) right = left + 1;
+
+            double needed = distance[left] + targetMeters;
+            while (right < count && distance[right] < needed) right++;
+            if (right >= count) break; // no queda distancia suficiente desde 'left' en adelante
+
+            // 3. Interpolar el instante exacto en el que se alcanza 'needed' entre right-1 y right.
+            double previousDistance = distance[right - 1];
+            double endTime;
+            if (distance[right] > previousDistance) {
+                double fraction = (needed - previousDistance) / (distance[right] - previousDistance);
+                endTime = timeSeconds[right - 1]
+                        + fraction * (timeSeconds[right] - timeSeconds[right - 1]);
+            } else {
+                endTime = timeSeconds[right];
+            }
+
+            double duration = endTime - timeSeconds[left];
+            if (duration > 0 && (minTimeSec == null || duration < minTimeSec)) {
+                minTimeSec = duration;
             }
         }
         return minTimeSec;
