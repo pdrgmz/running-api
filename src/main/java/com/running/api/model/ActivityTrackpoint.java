@@ -34,6 +34,7 @@ public class ActivityTrackpoint {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Schema(description = "ID autoincremental del punto", example = "1024")
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -41,19 +42,27 @@ public class ActivityTrackpoint {
     @JsonIgnore
     private Activity activity;
 
+    @Schema(description = "Marca temporal del punto", example = "2026-09-05T07:00:05")
     private LocalDateTime timestamp;
 
+    @Schema(description = "Latitud GPS en grados decimales", example = "40.4168")
     private Double latitude;
 
+    @Schema(description = "Longitud GPS en grados decimales", example = "-3.7038")
     private Double longitude;
 
+    @Schema(description = "Altitud en metros", example = "650.0")
     private Double altitudeMeters;
 
+    @Schema(description = "Distancia acumulada desde el inicio en metros", example = "1250.5")
     private Double distanceMeters;
 
+    @Schema(description = "Frecuencia cardíaca en bpm", example = "148")
     private Integer heartRate;
 
+    @Schema(description = "Cadencia en pasos por minuto (spm)", example = "172")
     private Integer cadence;
 
+    @Schema(description = "Velocidad instantánea en m/s", example = "3.42")
     private Double speed;
 }

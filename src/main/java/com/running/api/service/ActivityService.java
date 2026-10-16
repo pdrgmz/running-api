@@ -32,20 +32,24 @@ public class ActivityService {
     private final StatsService statsService;
 
     @Transactional(readOnly = true)
-    public Page<Activity> getAllActivities(Pageable pageable) {
-        return activityRepository.findAll(pageable);
+    public Page<Activity> getAllActivities(Long userId, Pageable pageable) {
+        return activityRepository.findByUserId(userId, pageable);
     }
 
     @Transactional(readOnly = true)
-    public Optional<Activity> getActivityById(String id) {
-        return activityRepository.findById(id);
+    public Optional<Activity> getActivityById(Long userId, String id) {
+        return activityRepository.findByIdAndUserId(id, userId);
     }
 
-    public List<ActivityTrackpoint> getActivityTrackpointsById(String id) {
-        return getActivityTrackpointsById(id, null);
+    public List<ActivityTrackpoint> getActivityTrackpointsById(Long userId, String id) {
+        return getActivityTrackpointsById(userId, id, null);
     }
 
-    public List<ActivityTrackpoint> getActivityTrackpointsById(String id, String resolution) {
+    public List<ActivityTrackpoint> getActivityTrackpointsById(Long userId, String id, String resolution) {
+        // Verifica la propiedad antes de exponer la telemetría.
+        if (activityRepository.findByIdAndUserId(id, userId).isEmpty()) {
+            return List.of();
+        }
         List<ActivityTrackpoint> points = trackpointRepository.findByActivityIdOrderByTimestampAsc(id);
         if (points.isEmpty() || resolution == null || resolution.trim().isEmpty()) {
             return points;
@@ -86,17 +90,23 @@ public class ActivityService {
     }
 
     @Transactional
-    public int deleteAllActivities() {
-        long count = activityRepository.count();
+    public int deleteAllActivities(Long userId) {
+        List<Activity> activities = activityRepository.findByUserId(userId);
+        int count = activities.size();
 
-        trackpointRepository.deleteAll();
-        activityRepository.deleteAll();
-        personalRecordRepository.deleteAll();
-        summaryStatsRepository.deleteAll();
+        // Elimina los ficheros de respaldo del usuario (no toda la carpeta compartida).
+        for (Activity activity : activities) {
+            deleteBackupFile(activity);
+        }
 
-        // Reset global stats to 0
+        // El borrado de actividades propaga a sus trackpoints (cascade + orphanRemoval).
+        activityRepository.deleteAll(activities);
+        personalRecordRepository.deleteByUserId(userId);
+        summaryStatsRepository.deleteByUserId(userId);
+
+        // Reinicia el resumen del usuario a cero.
         summaryStatsRepository.save(GlobalSummaryStats.builder()
-                .id(1L)
+                .userId(userId)
                 .totalActivities(0L)
                 .totalDistanceMeters(0.0)
                 .totalTimeSeconds(0.0)
@@ -105,22 +115,27 @@ public class ActivityService {
                 .maxHeartRateGlobal(0)
                 .build());
 
-        if (backupStorageService != null) {
-            backupStorageService.clearStorage();
-        }
-
-        return (int) count;
+        return count;
     }
 
     @Transactional
-    public boolean deleteActivityById(String id) {
-        Optional<Activity> activityOpt = activityRepository.findById(id);
+    public boolean deleteActivityById(Long userId, String id) {
+        Optional<Activity> activityOpt = activityRepository.findByIdAndUserId(id, userId);
         if (activityOpt.isEmpty()) {
             return false;
         }
 
         Activity activity = activityOpt.get();
+        deleteBackupFile(activity);
 
+        activityRepository.delete(activity);
+        fileService.recalculateAllStats(userId);
+        statsService.recalculatePersonalRecords(userId);
+
+        return true;
+    }
+
+    private void deleteBackupFile(Activity activity) {
         if (activity.getBackupFilePath() != null) {
             try {
                 Files.deleteIfExists(Path.of(activity.getBackupFilePath()));
@@ -128,11 +143,5 @@ public class ActivityService {
                 // Archivo de respaldo ya no existe o no se puede eliminar
             }
         }
-
-        activityRepository.delete(activity);
-        fileService.recalculateAllStats();
-        statsService.recalculatePersonalRecords();
-
-        return true;
     }
 }

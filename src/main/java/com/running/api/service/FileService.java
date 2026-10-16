@@ -54,37 +54,31 @@ public class FileService {
     @Transactional
     public Activity createActivity(Activity activity) {
         Activity saved = activityRepository.save(activity);
-        recalculateAllStats();
+        recalculateAllStats(saved.getUserId());
         statsService.checkAndSetPersonalRecords(saved);
         return saved;
     }
 
     @Transactional
-    public void recalculateAllStats() {
-        GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary();
+    public void recalculateAllStats(Long userId) {
+        GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary(userId);
         if (newStats == null) {
-            newStats = GlobalSummaryStats.builder()
-                    .id(1L)
-                    .totalActivities(0L)
-                    .totalDistanceMeters(0.0)
-                    .totalTimeSeconds(0.0)
-                    .totalElevationGain(0.0)
-                    .totalCalories(0L)
-                    .maxHeartRateGlobal(0)
-                    .build();
+            newStats = new GlobalSummaryStats(0L, 0.0, 0.0, 0.0, 0L, 0);
         }
-        newStats.setId(1L);
-        summaryStatsRepository.save(newStats);
+        newStats.setUserId(userId);
+        final GlobalSummaryStats stats = newStats;
+        summaryStatsRepository.findByUserId(userId).ifPresent(existing -> stats.setId(existing.getId()));
+        summaryStatsRepository.save(stats);
     }
 
     @Async("taskExecutor")
-    public void processBulkUploadAsync(byte[] zipBytes, String filename, String uploadId) {
+    public void processBulkUploadAsync(byte[] zipBytes, String filename, String uploadId, Long userId) {
         try {
-            log.info("[{}] Iniciando carga de {} archivos desde {}", uploadId, filename, zipBytes.length);
+            log.info("[{}] Iniciando carga de {} archivos desde {} (usuario {})", uploadId, filename, zipBytes.length, userId);
             int total = countValidFiles(zipBytes);
             bulkUploadStatusTracker.setTotalFiles(uploadId, total);
             log.info("[{}] Se encontraron {} archivos válidos en el ZIP", uploadId, total);
-            processZipFile(zipBytes, filename, uploadId);
+            processZipFile(zipBytes, filename, uploadId, userId);
             bulkUploadStatusTracker.setStatus(uploadId, "COMPLETED");
             log.info("[{}] Carga completada", uploadId);
         } catch (Exception e) {
@@ -95,13 +89,14 @@ public class FileService {
     }
 
     @Transactional
-    public Activity saveActivityFile(MultipartFile file) throws Exception {
+    public Activity saveActivityFile(MultipartFile file, Long userId) throws Exception {
         String filename = file.getOriginalFilename() != null ? file.getOriginalFilename().toLowerCase() : "";
         String fileType = detectFileType(filename);
 
         try (InputStream is = file.getInputStream()) {
             Activity activity = parseFile(is, fileType);
             activity.setSourceFileType(fileType);
+            activity.setUserId(userId);
 
             String backupPath = backupStorageService.store(file, activity.getId(), fileType != null ? fileType : "file");
             activity.setBackupFilePath(backupPath);
@@ -114,10 +109,11 @@ public class FileService {
      * Guarda una actividad sin recalcular estadísticas ni records personales.
      * Usado en la importación masiva en paralelo donde los stats se calculan al final.
      */
-    private void saveActivityWithoutStats(InputStream is, String fileType) throws Exception {
+    private void saveActivityWithoutStats(InputStream is, String fileType, Long userId) throws Exception {
         byte[] bytes = is.readAllBytes();
         Activity activity = parseFile(new ByteArrayInputStream(bytes), fileType);
         activity.setSourceFileType(fileType);
+        activity.setUserId(userId);
 
         String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId(), fileType);
         activity.setBackupFilePath(backupPath);
@@ -183,7 +179,7 @@ public class FileService {
         return count;
     }
 
-    private void processZipFile(byte[] zipBytes, String filename, String uploadId) {
+    private void processZipFile(byte[] zipBytes, String filename, String uploadId, Long userId) {
         // 1. Leer todos los entries del ZIP primero (secuencial - ZipInputStream no es thread-safe)
         List<ZipFileData> filesToProcess = new ArrayList<>();
         try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
@@ -224,7 +220,7 @@ public class FileService {
                     TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
                     txTemplate.execute(status -> {
                         try {
-                            saveActivityWithoutStats(new ByteArrayInputStream(fileData.data), fileData.fileType);
+                            saveActivityWithoutStats(new ByteArrayInputStream(fileData.data), fileData.fileType, userId);
                         } catch (Exception e) {
                             throw new RuntimeException(e.getMessage(), e);
                         }
@@ -252,8 +248,8 @@ public class FileService {
         // 3. Recalcular estadísticas y records personales UNA SOLA VEZ al final
         log.info("[{}] Recalculando estadísticas finales...", uploadId);
         try {
-            recalculateAllStats();
-            statsService.recalculateAllPersonalRecords();
+            recalculateAllStats(userId);
+            statsService.recalculateAllPersonalRecords(userId);
             log.info("[{}] Estadísticas y records recalculados", uploadId);
         } catch (Exception e) {
             bulkUploadStatusTracker.addError(uploadId, "final-stats", "Error al recalcular estadísticas finales: " + e.getMessage());
@@ -263,10 +259,10 @@ public class FileService {
 
     private record ZipFileData(String fileName, String fileType, byte[] data) {}
 
-    public void exportBulkJsonZip(List<String> ids, HttpServletResponse response) throws Exception {
+    public void exportBulkJsonZip(Long userId, List<String> ids, HttpServletResponse response) throws Exception {
         List<Activity> activities = (ids != null && !ids.isEmpty())
-                ? activityRepository.findAllById(ids)
-                : activityRepository.findAll();
+                ? activityRepository.findByIdInAndUserId(ids, userId)
+                : activityRepository.findByUserId(userId);
 
         response.setContentType("application/zip");
         response.setHeader("Content-Disposition", "attachment; filename=\"activities_json_export.zip\"");
@@ -283,10 +279,10 @@ public class FileService {
         }
     }
 
-    public void exportBulkBackupZip(List<String> ids, HttpServletResponse response) throws Exception {
+    public void exportBulkBackupZip(Long userId, List<String> ids, HttpServletResponse response) throws Exception {
         List<Activity> activities = (ids != null && !ids.isEmpty())
-                ? activityRepository.findAllById(ids)
-                : activityRepository.findAll();
+                ? activityRepository.findByIdInAndUserId(ids, userId)
+                : activityRepository.findByUserId(userId);
 
         response.setContentType("application/zip");
         response.setHeader("Content-Disposition", "attachment; filename=\"activities_backup_export.zip\"");

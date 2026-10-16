@@ -7,6 +7,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
@@ -21,7 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "activities")
+@Table(name = "activities", indexes = @Index(name = "idx_activities_user_id", columnList = "user_id"))
 @Getter
 @Setter
 @NoArgsConstructor
@@ -34,9 +35,14 @@ public class Activity {
     @Schema(description = "ID único de la actividad (ISO Timestamp o UUID)", example = "2026-09-05T07:00:00Z")
     private String id;
 
-    @Schema(description = "Nombre asignado a la carrera")
+    @Schema(description = "ID del usuario propietario de la actividad")
+    @Column(name = "user_id")
+    private Long userId;
+
+    @Schema(description = "Nombre asignado a la carrera", example = "Carrera matutina")
     private String name;
 
+    @Schema(description = "Fecha y hora de inicio de la carrera", example = "2026-09-05T07:00:00")
     private LocalDateTime startTime;
 
     @Schema(description = "Distancia total recorrida en metros")
@@ -78,6 +84,7 @@ public class Activity {
     @Schema(description = "Estimación de la Velocidad Aeróbica Máxima (VAM) en km/h")
     private Double vamKmH;
 
+    @Schema(description = "Calorías totales quemadas", example = "780")
     private Integer totalCalories;
 
     @Schema(description = "Desnivel positivo acumulado (D+) en metros")
@@ -96,6 +103,7 @@ public class Activity {
     @Column(columnDefinition = "TEXT")
     private String extraData;
 
+    @Schema(description = "Fecha y hora de creación del registro", example = "2026-09-05T07:05:00")
     private LocalDateTime createdAt;
 
     @OneToMany(mappedBy = "activity", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)

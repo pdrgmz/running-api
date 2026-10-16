@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.running.api.mcp.tools.ActivityTools;
 import com.running.api.mcp.tools.AnalyticsTools;
 import com.running.api.mcp.tools.StatsTools;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -32,6 +34,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @RestController
 @RequestMapping("/mcp")
 @RequiredArgsConstructor
+@Tag(name = "MCP (Model Context Protocol)",
+     description = "Servidor MCP sobre JSON-RPC 2.0 para integrar las métricas de carrera con LLMs. "
+             + "Requiere el mismo JWT que la API REST y opera solo sobre los datos del usuario autenticado.")
 public class McpServerController {
 
     private final ObjectMapper objectMapper;
@@ -115,6 +120,8 @@ public class McpServerController {
     }
 
     @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "Abrir el stream SSE de una sesión MCP",
+               description = "Endpoint Server-Sent Events para el transporte MCP. Requiere la cabecera Mcp-Session-Id de una sesión inicializada y un JWT válido.")
     public void handleGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String sessionId = request.getHeader("Mcp-Session-Id");
         if (sessionId == null || !sessions.containsKey(sessionId)) {
@@ -138,7 +145,13 @@ public class McpServerController {
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public JsonNode handleRequest(@RequestBody JsonNode request,
+    @Operation(summary = "Endpoint principal MCP (JSON-RPC 2.0)",
+               description = "Recibe peticiones JSON-RPC 2.0. Métodos soportados: initialize, ping, tools/list y tools/call. "
+                       + "Tras initialize se devuelve la cabecera Mcp-Session-Id que debe enviarse en las peticiones siguientes.")
+    public JsonNode handleRequest(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    description = "Petición JSON-RPC 2.0 (jsonrpc, id, method y params)", required = true)
+            @RequestBody JsonNode request,
             @RequestHeader(value = "Mcp-Session-Id", required = false) String sessionId,
             HttpServletResponse response) {
         String method = request.path("method").asText();

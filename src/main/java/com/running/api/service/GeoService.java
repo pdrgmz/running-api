@@ -24,8 +24,8 @@ public class GeoService {
     private final ActivityTrackpointRepository trackpointRepository;
 
     @Transactional(readOnly = true)
-    public GeoJsonDto exportGeoJson(String activityId) {
-        Activity activity = activityRepository.findById(activityId)
+    public GeoJsonDto exportGeoJson(Long userId, String activityId) {
+        Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
         List<ActivityTrackpoint> trackpoints = trackpointRepository.findByActivityIdOrderByTimestampAsc(activityId);
@@ -59,8 +59,8 @@ public class GeoService {
     }
 
     @Transactional(readOnly = true)
-    public String exportGpx(String activityId) {
-        Activity activity = activityRepository.findById(activityId)
+    public String exportGpx(Long userId, String activityId) {
+        Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
         List<ActivityTrackpoint> trackpoints = trackpointRepository.findByActivityIdOrderByTimestampAsc(activityId);

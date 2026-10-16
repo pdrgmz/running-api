@@ -2,6 +2,7 @@ package com.running.api.mcp.tools;
 
 import com.running.api.model.Activity;
 import com.running.api.repository.ActivityRepository;
+import com.running.api.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -14,13 +15,15 @@ public class ActivityTools {
     private static final int MAX_ACTIVITIES_LIST = 50;
 
     private final ActivityRepository activityRepository;
+    private final CurrentUserService currentUserService;
 
     public String getActivityById(String id) {
         if (id == null || id.isBlank()) {
             return "Error: El parámetro 'id' es requerido";
         }
         try {
-            return activityRepository.findById(id)
+            Long userId = currentUserService.requireUserId();
+            return activityRepository.findByIdAndUserId(id, userId)
                 .map(this::formatActivity)
                 .orElse("Actividad no encontrada con ID: " + id);
         } catch (Exception e) {
@@ -30,7 +33,8 @@ public class ActivityTools {
 
     public String listActivities() {
         try {
-            List<Activity> activities = activityRepository.findAll();
+            Long userId = currentUserService.requireUserId();
+            List<Activity> activities = activityRepository.findByUserId(userId);
             if (activities.isEmpty()) {
                 return "No hay actividades registradas.";
             }
@@ -58,7 +62,8 @@ public class ActivityTools {
 
     public String getRecentActivities() {
         try {
-            List<Activity> recent = activityRepository.findByOrderByStartTimeDesc();
+            Long userId = currentUserService.requireUserId();
+            List<Activity> recent = activityRepository.findByUserIdOrderByStartTimeDesc(userId);
             if (recent.isEmpty()) {
                 return "No hay actividades registradas.";
             }

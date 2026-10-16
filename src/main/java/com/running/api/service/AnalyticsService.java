@@ -52,8 +52,8 @@ public class AnalyticsService {
     private Integer defaultMaxHr;
 
     // 1. Splits por Kilómetro
-    public List<SplitDto> calculateSplits(String activityId) {
-        Activity activity = activityRepository.findById(activityId)
+    public List<SplitDto> calculateSplits(Long userId, String activityId) {
+        Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
         List<ActivityTrackpoint> points = activity.getTrackpoints();
@@ -116,8 +116,8 @@ public class AnalyticsService {
     }
 
     // 2. Zonas de Frecuencia Cardíaca (Z1 a Z5)
-    public HrZonesResponseDto calculateHrZones(String activityId) {
-        Activity activity = activityRepository.findById(activityId)
+    public HrZonesResponseDto calculateHrZones(Long userId, String activityId) {
+        Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
         int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
@@ -152,8 +152,8 @@ public class AnalyticsService {
     }
 
     // 3. Cardiac Drift (Desacople Aeróbico) con guardas contra división por cero
-    public CardiacDriftResponseDto calculateCardiacDrift(String activityId) {
-        Activity activity = activityRepository.findById(activityId)
+    public CardiacDriftResponseDto calculateCardiacDrift(Long userId, String activityId) {
+        Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
         List<ActivityTrackpoint> points = activity.getTrackpoints();
@@ -208,8 +208,8 @@ public class AnalyticsService {
     }
 
     // 4. Carga de Entrenamiento (TRIMP / HRSS)
-    public TrainingLoadResponseDto calculateTrainingLoad(String activityId) {
-        Activity activity = activityRepository.findById(activityId)
+    public TrainingLoadResponseDto calculateTrainingLoad(Long userId, String activityId) {
+        Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
         return computeTrainingLoadDetails(activity);
     }
@@ -281,8 +281,8 @@ public class AnalyticsService {
     }
 
     // 5. Estimación VO2Max y VAM (Velocidad Aeróbica Máxima)
-    public Vo2MaxVamResponseDto calculateVo2MaxAndVam(String activityId) {
-        Activity activity = activityRepository.findById(activityId)
+    public Vo2MaxVamResponseDto calculateVo2MaxAndVam(Long userId, String activityId) {
+        Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
         return computeVo2MaxAndVamDetails(activity);
     }
@@ -454,13 +454,13 @@ public class AnalyticsService {
         return modified;
     }
 
-    public List<PmcPointDto> calculatePmcHistory(LocalDate startDate, LocalDate endDate) {
+    public List<PmcPointDto> calculatePmcHistory(Long userId, LocalDate startDate, LocalDate endDate) {
         // 1. Ampliamos el rango de búsqueda 120 días atrás para el "warm-up" del algoritmo EWMA
         LocalDate warmUpStartDate = startDate.minusDays(PMC_WARMUP_DAYS);
 
         // 2. Mapeamos la suma de TRIMP agrupada por fecha desde la BD
         Map<LocalDate, Double> dailyTrimpMap = activityRepository
-        .findDailyTrimpSum(warmUpStartDate, endDate)
+        .findDailyTrimpSum(userId, warmUpStartDate, endDate)
         .stream()
         .collect(Collectors.toMap(
                 DailyTrimpProjection::getDate,
@@ -514,9 +514,9 @@ public class AnalyticsService {
         return Math.round(value * 100.0) / 100.0;
     }
 
-    public EddingtonStatsDto calculateEddingtonNumber() {
+    public EddingtonStatsDto calculateEddingtonNumber(Long userId) {
         // Agrupa distancia total por día redondeada a entero (en km)
-        List<Integer> dailyDistancesKm = activityRepository.findDailyDistancesKmDescending();
+        List<Integer> dailyDistancesKm = activityRepository.findDailyDistancesKmDescending(userId);
 
         int eddingtonNumber = 0;
         for (int i = 0; i < dailyDistancesKm.size(); i++) {
@@ -535,15 +535,15 @@ public class AnalyticsService {
         return new EddingtonStatsDto(eddingtonNumber, (int) runsForNext, remainingRuns, nextE);
     }
 
-    public AcwrStatusDto calculateCurrentAcwr() {
+    public AcwrStatusDto calculateCurrentAcwr(Long userId) {
         LocalDate today = LocalDate.now();
 
         // Obtenemos la fecha de la primera actividad en la BD (o 1 año atrás por defecto)
-        LocalDate earliestDate = activityRepository.findEarliestActivityDate()
+        LocalDate earliestDate = activityRepository.findEarliestActivityDate(userId)
                 .orElse(today.minusYears(1));
 
         // Calculamos el historial del PMC procesando la inercia real desde la primera carrera
-        List<PmcPointDto> pmcHistory = calculatePmcHistory(earliestDate, today);
+        List<PmcPointDto> pmcHistory = calculatePmcHistory(userId, earliestDate, today);
 
         if (pmcHistory.isEmpty()) {
             return new AcwrStatusDto(today, 0.0, 0.0, 0.0, "UNDETERMINED", "Sin datos suficientes.");

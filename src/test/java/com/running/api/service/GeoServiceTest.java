@@ -37,12 +37,12 @@ class GeoServiceTest {
         GeoService service = new GeoService(activityRepository, trackpointRepository);
         Activity activity = Activity.builder().id("a1").name("Run & <fast>").build();
 
-        when(activityRepository.findById("a1")).thenReturn(Optional.of(activity));
+        when(activityRepository.findByIdAndUserId("a1", 7L)).thenReturn(Optional.of(activity));
         when(trackpointRepository.findByActivityIdOrderByTimestampAsc("a1"))
                 .thenReturn(List.of(ActivityTrackpoint.builder()
                         .latitude(40.0).longitude(-3.0).distanceMeters(0.0).build()));
 
-        String gpx = service.exportGpx("a1");
+        String gpx = service.exportGpx(7L, "a1");
 
         assertThat(gpx).contains("Run &amp; &lt;fast&gt;");
         assertThat(gpx).doesNotContain("<time>");
@@ -53,10 +53,10 @@ class GeoServiceTest {
         GeoService service = new GeoService(activityRepository, trackpointRepository);
         Activity activity = Activity.builder().id("a1").name("Run").build();
 
-        when(activityRepository.findById("a1")).thenReturn(Optional.of(activity));
+        when(activityRepository.findByIdAndUserId("a1", 7L)).thenReturn(Optional.of(activity));
         when(trackpointRepository.findByActivityIdOrderByTimestampAsc("a1")).thenReturn(List.of());
 
-        GeoJsonDto dto = service.exportGeoJson("a1");
+        GeoJsonDto dto = service.exportGeoJson(7L, "a1");
 
         assertThat(dto.getFeatures()).hasSize(1);
         assertThat(dto.getFeatures().get(0).getProperties().get("startTime")).isNull();

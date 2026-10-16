@@ -13,6 +13,7 @@
 - [Estructura del Proyecto](#estructura-del-proyecto)
 - [Configuración](#configuración)
 - [Despliegue con Docker](#despliegue-con-docker)
+- [Autenticación](#autenticación)
 - [Endpoints](#endpoints)
 - [Modelos de Datos](#modelos-de-datos)
 - [Pruebas y Calidad de Código](#pruebas-y-calidad-de-código)
@@ -36,6 +37,12 @@
 ---
 
 ## Funcionalidades
+
+### Autenticación y Multiusuario
+- Registro y login con **JWT** (HS256) y contraseñas cifradas con BCrypt
+- Token de acceso + **refresh token** para renovación
+- Aislamiento total por usuario: actividades, estadísticas, récords y analítica
+- Servidor **MCP** protegido con el mismo JWT
 
 ### Gestión de Archivos
 - Importación individual de archivos `.tcx`, `.gpx` y `.fit`
@@ -78,17 +85,20 @@
 ```
 src/main/java/com/running/api/
 ├── config/
+│   ├── AdminSeeder.java         # Crea el admin y le asigna actividades sin dueño
 │   ├── AsyncConfig.java         # Executors @Async (taskExecutor, zipExecutor)
 │   ├── CorsConfig.java          # Configuración CORS
 │   └── OpenApiConfig.java       # Configuración OpenAPI/Swagger
 ├── controller/
 │   ├── ActivityController.java  # CRUD de actividades
 │   ├── AnalyticsController.java # Métricas avanzadas
+│   ├── AuthController.java      # Registro, login, refresh y /me
 │   ├── FilesController.java     # Importación/exportación TCX/GPX/FIT
 │   ├── GeoController.java       # Exportación GeoJSON/GPX
 │   └── StatsController.java     # Estadísticas y récords
 ├── dto/
 │   ├── AcwrStatusDto.java
+│   ├── AuthResponseDto.java     # Tokens + datos del usuario
 │   ├── BulkUploadStatusDto.java
 │   ├── CardiacDriftResponseDto.java
 │   ├── DaytimeStatsDto.java
@@ -101,17 +111,23 @@ src/main/java/com/running/api/
 │   ├── HrZoneDetailDto.java
 │   ├── HrZonesMapDto.java
 │   ├── HrZonesResponseDto.java
+│   ├── LoginRequestDto.java     # Credenciales de login
 │   ├── PmcPointDto.java
 │   ├── RacePredictionsDto.java
 │   ├── RecordResponseDto.java
+│   ├── RefreshTokenRequestDto.java
+│   ├── RegisterRequestDto.java  # Datos de registro
 │   ├── SplitDto.java
 │   ├── StreakStatsDto.java
 │   ├── SummaryStatsDto.java
 │   ├── TrainingLoadResponseDto.java
+│   ├── UserResponseDto.java     # Datos públicos del usuario
 │   ├── Vo2MaxVamResponseDto.java
 │   └── WeekdayStatsDto.java
 ├── exception/
+│   ├── DuplicateEmailException.java
 │   ├── GlobalExceptionHandler.java
+│   ├── InvalidCredentialsException.java
 │   └── ResourceNotFoundException.java
 ├── mapper/
 │   └── ActivityMapper.java      # Mapeo FitActivityDTO -> Activity
@@ -124,18 +140,27 @@ src/main/java/com/running/api/
 ├── model/
 │   ├── Activity.java            # Entidad principal de carrera
 │   ├── ActivityTrackpoint.java  # Puntos de telemetría segundo a segundo
-│   ├── GlobalSummaryStats.java  # Estadísticas globales acumuladas
-│   └── PersonalRecord.java      # Récords personales por distancia
+│   ├── GlobalSummaryStats.java  # Estadísticas globales acumuladas (por usuario)
+│   ├── PersonalRecord.java      # Récords personales por distancia (por usuario)
+│   └── User.java                # Usuario (email + hash de contraseña + rol)
 ├── repository/
 │   ├── ActivityRepository.java
 │   ├── ActivityTrackpointRepository.java
 │   ├── GlobalSummaryStatsRepository.java
 │   ├── PersonalRecordRepository.java
+│   ├── UserRepository.java
 │   └── projection/
 │       └── DailyTrimpProjection.java
+├── security/
+│   ├── CurrentUserService.java       # Resuelve el userId del SecurityContext
+│   ├── JwtAuthenticationFilter.java  # Valida el Bearer token en cada petición
+│   ├── JwtService.java               # Emisión/validación de tokens JWT
+│   ├── SecurityConfig.java           # Cadena de filtros, rutas públicas y 401/403 JSON
+│   └── UserPrincipal.java            # Principal autenticado (id, email, rol)
 ├── service/
 │   ├── ActivityService.java
 │   ├── AnalyticsService.java
+│   ├── AuthService.java         # Registro, login y refresh (BCrypt)
 │   ├── BackupStorageService.java
 │   ├── BulkUploadStatusTracker.java
 │   ├── FileService.java
@@ -166,6 +191,11 @@ src/main/java/com/running/api/
 | `APP_STORAGE_LOCATION` | `./storage` | Ruta de respaldo de archivos de actividad |
 | `APP_USER_MAX_HR` | `185` | Frecuencia cardíaca máxima para zonas FC |
 | `APP_ELEVATION_MIN_THRESHOLD_METERS` | `0.1` | Umbral de histéresis para filtrar ruido GPS |
+| `APP_JWT_SECRET` | *(clave de desarrollo)* | Clave de firma de los JWT (HS256). **Obligatorio cambiarla en producción** |
+| `APP_JWT_EXPIRATION_MINUTES` | `1440` | Vigencia del token de acceso en minutos (24 h) |
+| `APP_JWT_REFRESH_EXPIRATION_MINUTES` | `10080` | Vigencia del refresh token en minutos (7 días) |
+| `APP_ADMIN_EMAIL` | `admin@running.local` | Email del usuario administrador sembrado al arrancar |
+| `APP_ADMIN_PASSWORD` | `Admin1234!` | Contraseña inicial del administrador (solo se aplica al crearlo) |
 
 ### Archivo `application.yml`
 
@@ -175,6 +205,10 @@ server:
   forward-headers-strategy: framework
 
 spring:
+  autoconfigure:
+    # Esta API usa JWT: desactiva el usuario "user" por defecto y su password generado
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
   datasource:
     url: jdbc:postgresql://localhost:5433/running_api
     username: runninging
@@ -202,6 +236,12 @@ app:
     allowed-origins: http://localhost:3000,http://localhost:5173
   openapi:
     server-url: https://running-api.pdrgmz.uk
+  auth:
+    jwt-secret: ${APP_JWT_SECRET:cambia-esta-clave-secreta-de-desarrollo-minimo-32-bytes}
+    jwt-expiration-minutes: ${APP_JWT_EXPIRATION_MINUTES:1440}
+    refresh-expiration-minutes: ${APP_JWT_REFRESH_EXPIRATION_MINUTES:10080}
+    admin-email: ${APP_ADMIN_EMAIL:admin@running.local}
+    admin-password: ${APP_ADMIN_PASSWORD:Admin1234!}
 ```
 
 ---
@@ -234,7 +274,95 @@ docker-compose down
 
 ---
 
+## Autenticación
+
+La API está protegida con **JWT** (HS256). Salvo los endpoints públicos de registro/login/refresh,
+todas las rutas —incluido el servidor **MCP**— requieren una cabecera:
+
+```
+Authorization: Bearer <token>
+```
+
+Cada usuario **solo puede ver y modificar sus propias actividades**, estadísticas, récords y
+analítica. No existe acceso cruzado entre usuarios.
+
+### Flujo típico
+
+1. **Registro** (`POST /api/v1/auth/register`) o **login** (`POST /api/v1/auth/login`).
+   La respuesta incluye el `token` de acceso y un `refreshToken`.
+2. Usar el `token` en `Authorization: Bearer <token>` en cada petición.
+3. Cuando el token de acceso expire, renovarlo con `POST /api/v1/auth/refresh`
+   enviando el `refreshToken`.
+
+### Respuesta de autenticación
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "tokenType": "Bearer",
+  "expiresInSeconds": 86400,
+  "refreshToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "refreshExpiresInSeconds": 604800,
+  "user": { "id": 1, "email": "runner@example.com", "role": "USER" }
+}
+```
+
+### Ejemplos
+
+```bash
+# Registro
+curl -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"runner@example.com","password":"password123"}'
+
+# Login
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"runner@example.com","password":"password123"}'
+
+# Renovar el token de acceso
+curl -X POST http://localhost:8080/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken":"<refreshToken>"}'
+
+# Consultar el usuario autenticado
+curl http://localhost:8080/api/v1/auth/me -H "Authorization: Bearer <token>"
+```
+
+### Tokens
+
+| Tipo | Claim `type` | Vigencia por defecto | Uso |
+|------|--------------|----------------------|-----|
+| **Acceso** | `ACCESS` | 24 h (`APP_JWT_EXPIRATION_MINUTES`) | Cabecera `Authorization: Bearer` |
+| **Refresco** | `REFRESH` | 7 días (`APP_JWT_REFRESH_EXPIRATION_MINUTES`) | Solo en `POST /api/v1/auth/refresh` |
+
+Un refresh token **no** sirve como token de acceso ni viceversa. El refresh no requiere
+cabecera `Authorization`: se autentica con el propio refresh token.
+
+### Usuario administrador
+
+Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
+`APP_ADMIN_PASSWORD`) y se le asignan las actividades históricas que aún no tengan dueño
+(útil al actualizar una base de datos previa a la incorporación de la autenticación).
+
+> ⚠️ La contraseña del administrador solo se aplica **al crear** el usuario. Cambiar
+> `APP_ADMIN_PASSWORD` después no actualiza la contraseña existente.
+
+---
+
 ## Endpoints
+
+> Salvo los marcados como **públicos**, todos los endpoints requieren
+> `Authorization: Bearer <token>`. Cada usuario accede únicamente a sus propios datos.
+
+### Autenticación (`/api/v1/auth`)
+
+| Método | Path | Público | Descripción |
+|--------|------|---------|-------------|
+| `POST` | `/register` | ✅ | Registrar un usuario y devolver sus tokens |
+| `POST` | `/login` | ✅ | Iniciar sesión y obtener los tokens |
+| `POST` | `/refresh` | ✅ | Renovar el token de acceso con un refresh token |
+| `GET` | `/me` | ❌ | Datos del usuario autenticado |
 
 ### Archivos (`/api/v1/files`)
 
@@ -289,12 +417,26 @@ docker-compose down
 
 | Método | Path | Descripción |
 |--------|------|-------------|
-| `POST` | `/mcp` | Endpoint principal MCP (JSON-RPC 2.0) |
-| `GET` | `/mcp` | Endpoint SSE (requiere cabecera `Mcp-Session-Id`) |
+| `POST` | `/mcp` | Endpoint principal MCP (JSON-RPC 2.0). Requiere `Authorization: Bearer <token>` |
+| `GET` | `/mcp` | Endpoint SSE (requiere cabecera `Mcp-Session-Id` y `Authorization: Bearer <token>`) |
+
+> El servidor MCP se autentica con el **mismo JWT** que la API REST. Las herramientas MCP
+> operan sobre las actividades del usuario dueño del token.
 
 ---
 
 ## Modelos de Datos
+
+### User
+Usuario de la aplicación. Es el propietario de las actividades, récords y estadísticas.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | Long | ID autoincremental |
+| `email` | String | Email único (identificador de login) |
+| `password` | String | Hash BCrypt de la contraseña |
+| `role` | String | Rol del usuario (`USER`, `ADMIN`) |
+| `createdAt` | LocalDateTime | Fecha de alta |
 
 ### Activity
 Entidad principal que representa una carrera con sus métricas consolidadas.
@@ -302,6 +444,7 @@ Entidad principal que representa una carrera con sus métricas consolidadas.
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `id` | String | ID único (ISO Timestamp o UUID) |
+| `userId` | Long | ID del usuario propietario (indexado) |
 | `name` | String | Nombre de la carrera |
 | `startTime` | LocalDateTime | Fecha/hora de inicio |
 | `distanceMeters` | Double | Distancia total (m) |
@@ -335,10 +478,11 @@ Punto de telemetría grabado segundo a segundo.
 | `speed` | Double | Velocidad (m/s) |
 
 ### PersonalRecord
-Marcas personales por distancia.
+Marcas personales por distancia. Único por usuario y categoría (`user_id`, `distance_category`).
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
+| `userId` | Long | ID del usuario propietario |
 | `distanceCategory` | String | Categoría (1k, 5k, 10k, 15k, 21k, 42k) |
 | `targetDistanceMeters` | Double | Distancia objetivo (m) |
 | `bestTimeSeconds` | Double | Mejor tiempo (s) |
@@ -348,10 +492,12 @@ Marcas personales por distancia.
 | `avgPaceMinPerKm` | Double | Ritmo medio |
 
 ### GlobalSummaryStats
-Estadísticas globales acumuladas (fila única con `id=1`).
+Estadísticas globales acumuladas. Una fila por usuario (`user_id` único).
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
+| `id` | Long | ID autoincremental |
+| `userId` | Long | ID del usuario propietario (único) |
 | `totalActivities` | Long | Total de actividades |
 | `totalDistanceMeters` | Double | Distancia total (m) |
 | `totalTimeSeconds` | Double | Tiempo total (s) |
@@ -406,6 +552,10 @@ Y la especificación OpenAPI en formato JSON:
 ```
 http://localhost:8080/v3/api-docs
 ```
+
+Swagger UI incluye el esquema de seguridad **Bearer**. Para probar endpoints protegidos:
+haz login en `/api/v1/auth/login`, copia el `token` y pulsa **Authorize** introduciendo
+`Bearer <token>`.
 
 ---
 

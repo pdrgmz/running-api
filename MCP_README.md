@@ -4,6 +4,27 @@ Este proyecto incluye un **servidor MCP (Model Context Protocol)** que permite a
 
 ---
 
+## Autenticación
+
+El endpoint `/mcp` está protegido con **JWT**. Todas las peticiones deben incluir la cabecera:
+
+```
+Authorization: Bearer <token>
+```
+
+El token se obtiene con `POST /api/v1/auth/login` (o `/register`). Las herramientas MCP
+operan sobre las actividades del **usuario dueño del token**, por lo que cada usuario solo
+ve sus propios datos.
+
+```bash
+# Obtener el token
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"runner@example.com","password":"password123"}'
+```
+
+---
+
 ## ¿Qué es MCP?
 
 MCP es un protocolo estándar que permite a modelos de lenguaje conectarse a APIs y datos externos. Tu API expone **herramientas** que el LLM puede llamar para obtener información.
@@ -43,8 +64,8 @@ El servidor implementa el protocolo MCP versión **2024-11-05** con soporte para
 
 | Endpoint | Descripción |
 |----------|-------------|
-| `POST /mcp` | Endpoint principal MCP (JSON-RPC) |
-| `GET /mcp` | Endpoint SSE (requiere `Mcp-Session-Id`) |
+| `POST /mcp` | Endpoint principal MCP (JSON-RPC). Requiere `Authorization: Bearer <token>` |
+| `GET /mcp` | Endpoint SSE (requiere `Mcp-Session-Id` y `Authorization: Bearer <token>`) |
 
 ---
 
@@ -81,7 +102,8 @@ Editar `claude_desktop_config.json`:
     "running-api": {
       "url": "http://localhost:8080/mcp",
       "headers": {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <token>"
       }
     }
   }
@@ -104,7 +126,10 @@ Editar `opencode.json`:
 {
   "mcpServers": {
     "running-api": {
-      "url": "http://localhost:8080/mcp"
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
     }
   }
 }
@@ -190,6 +215,7 @@ docker-compose up -d
 # MCP initialize
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -200,6 +226,7 @@ curl -X POST http://localhost:8080/mcp \
 # MCP tools/list
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -H "Mcp-Session-Id: <session-id>" \
   -d '{
     "jsonrpc": "2.0",
@@ -211,6 +238,7 @@ curl -X POST http://localhost:8080/mcp \
 # MCP tools/call
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -H "Mcp-Session-Id: <session-id>" \
   -d '{
     "jsonrpc": "2.0",
@@ -245,4 +273,6 @@ src/main/java/com/running/api/mcp/
 - El endpoint `/mcp` acepta POST y GET
 - Las herramientas son **solo lectura** (no modifican datos)
 - Se requiere el header `Mcp-Session-Id` después de la inicialización
+- Se requiere `Authorization: Bearer <token>` en todas las peticiones (JWT)
+- Las herramientas operan **solo sobre los datos del usuario dueño del token**
 - El protocolo implementado es **2024-11-05**

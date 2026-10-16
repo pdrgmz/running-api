@@ -2,6 +2,7 @@ package com.running.api.mcp.tools;
 
 import com.running.api.dto.RecordResponseDto;
 import com.running.api.dto.SummaryStatsDto;
+import com.running.api.security.CurrentUserService;
 import com.running.api.service.StatsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -19,10 +20,11 @@ public class StatsTools {
     );
 
     private final StatsService statsService;
+    private final CurrentUserService currentUserService;
 
     public String getSummaryStats() {
         try {
-            SummaryStatsDto stats = statsService.getSummary(null, null);
+            SummaryStatsDto stats = statsService.getSummary(currentUserService.requireUserId(), null, null);
             if (stats == null) {
                 return "No hay estadísticas disponibles";
             }
@@ -52,7 +54,7 @@ public class StatsTools {
 
     public String getPersonalRecords() {
         try {
-            List<RecordResponseDto> records = statsService.getPersonalRecords();
+            List<RecordResponseDto> records = statsService.getPersonalRecords(currentUserService.requireUserId());
             if (records == null || records.isEmpty()) {
                 return "No hay marcas personales registradas.";
             }
@@ -91,7 +93,7 @@ public class StatsTools {
         }
 
         try {
-            SummaryStatsDto stats = statsService.getSummary(normalizedPeriod, null);
+            SummaryStatsDto stats = statsService.getSummary(currentUserService.requireUserId(), normalizedPeriod, null);
             if (stats == null) {
                 return "No hay estadísticas disponibles para el período: " + period;
             }
@@ -121,7 +123,7 @@ public class StatsTools {
                 return "Error: Año fuera de rango válido (2000-2100): " + year;
             }
 
-            SummaryStatsDto stats = statsService.getSummary(null, yearInt);
+            SummaryStatsDto stats = statsService.getSummary(currentUserService.requireUserId(), null, yearInt);
             if (stats == null) {
                 return "No hay estadísticas disponibles para el año: " + year;
             }

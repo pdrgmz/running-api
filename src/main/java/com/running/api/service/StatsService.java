@@ -45,21 +45,21 @@ public class StatsService {
     }};
 
     @Transactional(readOnly = true)
-    public SummaryStatsDto getSummary(String period, Integer year) {
+    public SummaryStatsDto getSummary(Long userId, String period, Integer year) {
         LocalDateTime[] range = resolveDateRange(period, year);
         GlobalSummaryStats stats;
 
         if (range != null) {
-            stats = activityRepository.calculateAggregatedSummaryBetween(range[0], range[1]);
-            log.info("Estadísticas calculadas para el rango: {} - {}", range[0], range[1]);
+            stats = activityRepository.calculateAggregatedSummaryBetween(userId, range[0], range[1]);
+            log.info("Estadísticas calculadas para el usuario {} en el rango: {} - {}", userId, range[0], range[1]);
             log.info("Estadísticas: {}", stats);
 
             if (stats == null) {
-                stats = GlobalSummaryStats.builder().id(1L).build();
+                stats = new GlobalSummaryStats(0L, 0.0, 0.0, 0.0, 0L, 0);
             }
         } else {
-            stats = summaryStatsRepository.findById(1L)
-                    .orElseGet(this::calculateAndSaveInitialStats);
+            stats = summaryStatsRepository.findByUserId(userId)
+                    .orElseGet(() -> calculateAndSaveInitialStats(userId));
         }
 
         long totalActivities = stats.getTotalActivities();
@@ -177,11 +177,11 @@ public class StatsService {
     }
 
     @Transactional
-    public List<RecordResponseDto> getPersonalRecords() {
-        List<PersonalRecord> records = personalRecordRepository.findAll();
+    public List<RecordResponseDto> getPersonalRecords(Long userId) {
+        List<PersonalRecord> records = personalRecordRepository.findByUserId(userId);
 
         if (records.isEmpty()) {
-            records = recalculateAllPersonalRecords();
+            records = recalculateAllPersonalRecords(userId);
         }
 
         return records.stream().map(r -> {
@@ -267,12 +267,13 @@ public class StatsService {
         return minTimeSec;
     }
 
-    private GlobalSummaryStats calculateAndSaveInitialStats() {
-        GlobalSummaryStats initialStats = activityRepository.calculateAggregatedSummary();
+    private GlobalSummaryStats calculateAndSaveInitialStats(Long userId) {
+        GlobalSummaryStats initialStats = activityRepository.calculateAggregatedSummary(userId);
 
         if (initialStats == null) {
-            initialStats = GlobalSummaryStats.builder().id(1L).build();
+            initialStats = new GlobalSummaryStats(0L, 0.0, 0.0, 0.0, 0L, 0);
         }
+        initialStats.setUserId(userId);
 
         return summaryStatsRepository.save(initialStats);
     }
@@ -281,6 +282,7 @@ public class StatsService {
     public void checkAndSetPersonalRecords(Activity activity) {
         if (activity.getDistanceMeters() == null) return;
 
+        Long userId = activity.getUserId();
         List<ActivityTrackpoint> points = trackpointRepository.findByActivityIdOrderByTimestampAsc(activity.getId());
         if (points == null || points.isEmpty()) return;
 
@@ -293,17 +295,20 @@ public class StatsService {
             Double bestTimeForActivity = findFastestSegment(points, targetMeters);
             if (bestTimeForActivity == null) continue;
 
-            Optional<PersonalRecord> existingRecordOpt = personalRecordRepository.findByDistanceCategory(category);
+            Optional<PersonalRecord> existingRecordOpt =
+                    personalRecordRepository.findByUserIdAndDistanceCategory(userId, category);
 
             if (existingRecordOpt.isEmpty() || bestTimeForActivity < existingRecordOpt.get().getBestTimeSeconds()) {
                 double avgSpeed = targetMeters / bestTimeForActivity;
                 double pace = (1000.0 / (avgSpeed * 60.0));
 
                 PersonalRecord record = existingRecordOpt.orElseGet(() -> PersonalRecord.builder()
+                        .userId(userId)
                         .distanceCategory(category)
                         .targetDistanceMeters(targetMeters)
                         .build());
 
+                record.setUserId(userId);
                 record.setBestTimeSeconds(bestTimeForActivity);
                 record.setActivityId(activity.getId());
                 record.setActivityDate(activity.getStartTime());
@@ -315,14 +320,15 @@ public class StatsService {
         }
     }
 
-    public List<PersonalRecord> recalculateAllPersonalRecords() {
+    public List<PersonalRecord> recalculateAllPersonalRecords(Long userId) {
         List<PersonalRecord> calculatedRecords = new ArrayList<>();
 
         for (Map.Entry<String, Double> entry : TARGET_DISTANCES.entrySet()) {
             String category = entry.getKey();
             Double targetMeters = entry.getValue();
 
-            List<Activity> eligibleActivities = activityRepository.findByDistanceMetersGreaterThanEqual(targetMeters);
+            List<Activity> eligibleActivities =
+                    activityRepository.findByUserIdAndDistanceMetersGreaterThanEqual(userId, targetMeters);
 
             PersonalRecord bestRecordForCategory = null;
 
@@ -337,6 +343,7 @@ public class StatsService {
                         double pace = (1000.0 / (avgSpeed * 60.0));
 
                         bestRecordForCategory = PersonalRecord.builder()
+                                .userId(userId)
                                 .distanceCategory(category)
                                 .targetDistanceMeters(targetMeters)
                                 .bestTimeSeconds(bestTimeForActivity)
@@ -350,10 +357,12 @@ public class StatsService {
             }
 
             if (bestRecordForCategory != null) {
-                // Upsert: buscar por categoría y actualizar o crear
-                Optional<PersonalRecord> existingOpt = personalRecordRepository.findByDistanceCategory(category);
+                // Upsert: buscar por (usuario, categoría) y actualizar o crear
+                Optional<PersonalRecord> existingOpt =
+                        personalRecordRepository.findByUserIdAndDistanceCategory(userId, category);
                 if (existingOpt.isPresent()) {
                     PersonalRecord existing = existingOpt.get();
+                    existing.setUserId(userId);
                     existing.setBestTimeSeconds(bestRecordForCategory.getBestTimeSeconds());
                     existing.setActivityId(bestRecordForCategory.getActivityId());
                     existing.setActivityDate(bestRecordForCategory.getActivityDate());
@@ -371,21 +380,22 @@ public class StatsService {
     }
 
     @Transactional
-    public void recalculateStatsAndRecords() {
-        summaryStatsRepository.deleteAll();
-        GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary();
+    public void recalculateStatsAndRecords(Long userId) {
+        summaryStatsRepository.deleteByUserId(userId);
+        GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary(userId);
         if (newStats == null) {
-            newStats = GlobalSummaryStats.builder().id(1L).build();
+            newStats = new GlobalSummaryStats(0L, 0.0, 0.0, 0.0, 0L, 0);
         }
+        newStats.setUserId(userId);
         summaryStatsRepository.save(newStats);
 
-        // No es necesario deleteAll() — recalculateAllPersonalRecords() hace upsert por categoría
-        recalculateAllPersonalRecords();
+        // No es necesario deleteAll() — recalculateAllPersonalRecords() hace upsert por (usuario, categoría)
+        recalculateAllPersonalRecords(userId);
     }
 
     @Transactional
-    public void recalculatePersonalRecords() {
-        // No es necesario deleteAll() — recalculateAllPersonalRecords() hace upsert por categoría
-        recalculateAllPersonalRecords();
+    public void recalculatePersonalRecords(Long userId) {
+        // No es necesario deleteAll() — recalculateAllPersonalRecords() hace upsert por (usuario, categoría)
+        recalculateAllPersonalRecords(userId);
     }
 }

@@ -3,6 +3,10 @@ server:
   forward-headers-strategy: framework
 
 spring:
+  autoconfigure:
+    # Esta API usa JWT; desactiva el usuario "user" por defecto y su password generado.
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
   datasource:
     url: jdbc:postgresql://localhost:5433/running_api
     username: runninging
@@ -41,6 +45,14 @@ app:
     allowed-origins: http://localhost:3000,http://localhost:5173,https://running-api.pdrgmz.uk,http://running-api.pdrgmz.uk
   openapi:
     server-url: https://running-api.pdrgmz.uk
+  auth:
+    # Clave de firma JWT (HS256). En producción SIEMPRE sobreescribir vía APP_JWT_SECRET.
+    jwt-secret: ${APP_JWT_SECRET:cambia-esta-clave-secreta-de-desarrollo-minimo-32-bytes}
+    jwt-expiration-minutes: ${APP_JWT_EXPIRATION_MINUTES:1440}
+    refresh-expiration-minutes: ${APP_JWT_REFRESH_EXPIRATION_MINUTES:10080}
+    # Usuario administrador sembrado al arrancar; recibe las actividades históricas sin dueño.
+    admin-email: ${APP_ADMIN_EMAIL:admin@running.local}
+    admin-password: ${APP_ADMIN_PASSWORD:Admin1234!}
 
 springdoc:
   api-docs:

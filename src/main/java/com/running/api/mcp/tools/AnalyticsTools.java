@@ -5,6 +5,7 @@ import com.running.api.dto.HrZonesResponseDto;
 import com.running.api.dto.SplitDto;
 import com.running.api.dto.TrainingLoadResponseDto;
 import com.running.api.dto.Vo2MaxVamResponseDto;
+import com.running.api.security.CurrentUserService;
 import com.running.api.service.AnalyticsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -16,10 +17,11 @@ import java.util.List;
 public class AnalyticsTools {
 
     private final AnalyticsService analyticsService;
+    private final CurrentUserService currentUserService;
 
     public String getSplits(String activityId) {
         try {
-            List<SplitDto> splits = analyticsService.calculateSplits(activityId);
+            List<SplitDto> splits = analyticsService.calculateSplits(currentUserService.requireUserId(), activityId);
             if (splits == null || splits.isEmpty()) {
                 return "No hay splits disponibles para la actividad: " + activityId;
             }
@@ -39,7 +41,7 @@ public class AnalyticsTools {
 
     public String getHrZones(String activityId) {
         try {
-            HrZonesResponseDto zones = analyticsService.calculateHrZones(activityId);
+            HrZonesResponseDto zones = analyticsService.calculateHrZones(currentUserService.requireUserId(), activityId);
             if (zones == null || zones.getZones() == null) {
                 return "No hay datos de zonas de FC para la actividad: " + activityId;
             }
@@ -68,7 +70,7 @@ public class AnalyticsTools {
 
     public String getTrainingLoad(String activityId) {
         try {
-            TrainingLoadResponseDto tl = analyticsService.calculateTrainingLoad(activityId);
+            TrainingLoadResponseDto tl = analyticsService.calculateTrainingLoad(currentUserService.requireUserId(), activityId);
             if (tl == null) {
                 return "No hay datos de carga de entrenamiento para la actividad: " + activityId;
             }
@@ -93,7 +95,7 @@ public class AnalyticsTools {
 
     public String getVo2Max(String activityId) {
         try {
-            Vo2MaxVamResponseDto vo2 = analyticsService.calculateVo2MaxAndVam(activityId);
+            Vo2MaxVamResponseDto vo2 = analyticsService.calculateVo2MaxAndVam(currentUserService.requireUserId(), activityId);
             if (vo2 == null) {
                 return "No hay datos de VO2Max para la actividad: " + activityId;
             }
@@ -124,7 +126,7 @@ public class AnalyticsTools {
 
     public String getAcwrStatus() {
         try {
-            AcwrStatusDto acwr = analyticsService.calculateCurrentAcwr();
+            AcwrStatusDto acwr = analyticsService.calculateCurrentAcwr(currentUserService.requireUserId());
             if (acwr == null) {
                 return "No hay datos de ACWR disponibles";
             }
