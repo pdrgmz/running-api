@@ -12,7 +12,14 @@ El endpoint `/mcp` está protegido con **JWT**. Todas las peticiones deben inclu
 Authorization: Bearer <token>
 ```
 
-El token se obtiene con `POST /api/v1/auth/login` (o `/register`). Las herramientas MCP
+Como alternativa —recomendada para integraciones de larga duración— puedes usar una **clave de
+API** creada en `POST /api/v1/auth/api-keys`, sin necesidad de renovar tokens:
+
+```
+X-Api-Key: rk_Xk3pQ8aBcDeFgHiJkLmNoPqRsTuVwXyZ...
+```
+
+El token JWT (o la clave) se obtiene con `POST /api/v1/auth/login` (o `/register`). Las herramientas MCP
 operan sobre las actividades del **usuario dueño del token**, por lo que cada usuario solo
 ve sus propios datos.
 
@@ -273,6 +280,6 @@ src/main/java/com/running/api/mcp/
 - El endpoint `/mcp` acepta POST y GET
 - Las herramientas son **solo lectura** (no modifican datos)
 - Se requiere el header `Mcp-Session-Id` después de la inicialización
-- Se requiere `Authorization: Bearer <token>` en todas las peticiones (JWT)
+- Se requiere `Authorization: Bearer <token>` (JWT) o `X-Api-Key: rk_...` en todas las peticiones
 - Las herramientas operan **solo sobre los datos del usuario dueño del token**
 - El protocolo implementado es **2024-11-05**

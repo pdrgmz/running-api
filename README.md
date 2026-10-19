@@ -41,6 +41,7 @@
 ### Autenticación y Multiusuario
 - Registro y login con **JWT** (HS256) y contraseñas cifradas con BCrypt
 - Token de acceso + **refresh token** para renovación
+- **Claves de API** (`X-Api-Key`) para automatizaciones (n8n, scripts, cron), sin gestión de tokens
 - Aislamiento total por usuario: actividades, estadísticas, récords y analítica
 - Servidor **MCP** protegido con el mismo JWT
 
@@ -92,15 +93,19 @@ src/main/java/com/running/api/
 ├── controller/
 │   ├── ActivityController.java  # CRUD de actividades
 │   ├── AnalyticsController.java # Métricas avanzadas
+│   ├── ApiKeyController.java    # Gestión de claves de API (X-Api-Key)
 │   ├── AuthController.java      # Registro, login, refresh y /me
 │   ├── FilesController.java     # Importación/exportación TCX/GPX/FIT
 │   ├── GeoController.java       # Exportación GeoJSON/GPX
 │   └── StatsController.java     # Estadísticas y récords
 ├── dto/
 │   ├── AcwrStatusDto.java
+│   ├── ApiKeyCreatedResponseDto.java  # Clave recién creada (valor visible una sola vez)
+│   ├── ApiKeyResponseDto.java   # Metadatos de claves de API (sin valor)
 │   ├── AuthResponseDto.java     # Tokens + datos del usuario
 │   ├── BulkUploadStatusDto.java
 │   ├── CardiacDriftResponseDto.java
+│   ├── CreateApiKeyRequestDto.java # Nombre y vigencia de la clave
 │   ├── DaytimeStatsDto.java
 │   ├── EddingtonStatsDto.java
 │   ├── ErrorResponseDto.java
@@ -140,18 +145,21 @@ src/main/java/com/running/api/
 ├── model/
 │   ├── Activity.java            # Entidad principal de carrera
 │   ├── ActivityTrackpoint.java  # Puntos de telemetría segundo a segundo
+│   ├── ApiKey.java              # Clave de API (hash SHA-256, caducidad y último uso)
 │   ├── GlobalSummaryStats.java  # Estadísticas globales acumuladas (por usuario)
 │   ├── PersonalRecord.java      # Récords personales por distancia (por usuario)
 │   └── User.java                # Usuario (email + hash de contraseña + rol)
 ├── repository/
 │   ├── ActivityRepository.java
 │   ├── ActivityTrackpointRepository.java
+│   ├── ApiKeyRepository.java
 │   ├── GlobalSummaryStatsRepository.java
 │   ├── PersonalRecordRepository.java
 │   ├── UserRepository.java
 │   └── projection/
 │       └── DailyTrimpProjection.java
 ├── security/
+│   ├── ApiKeyAuthenticationFilter.java # Valida la cabecera X-Api-Key
 │   ├── CurrentUserService.java       # Resuelve el userId del SecurityContext
 │   ├── JwtAuthenticationFilter.java  # Valida el Bearer token en cada petición
 │   ├── JwtService.java               # Emisión/validación de tokens JWT
@@ -160,6 +168,7 @@ src/main/java/com/running/api/
 ├── service/
 │   ├── ActivityService.java
 │   ├── AnalyticsService.java
+│   ├── ApiKeyService.java        # Creación, listado, revocación y validación de claves
 │   ├── AuthService.java         # Registro, login y refresh (BCrypt)
 │   ├── BackupStorageService.java
 │   ├── BulkUploadStatusTracker.java
@@ -283,6 +292,9 @@ todas las rutas —incluido el servidor **MCP**— requieren una cabecera:
 Authorization: Bearer <token>
 ```
 
+Como alternativa para automatizaciones, se admiten **claves de API** en la cabecera
+`X-Api-Key` (ver [Claves de API](#claves-de-api-automatizaciones)).
+
 Cada usuario **solo puede ver y modificar sus propias actividades**, estadísticas, récords y
 analítica. No existe acceso cruzado entre usuarios.
 
@@ -339,6 +351,48 @@ curl http://localhost:8080/api/v1/auth/me -H "Authorization: Bearer <token>"
 Un refresh token **no** sirve como token de acceso ni viceversa. El refresh no requiere
 cabecera `Authorization`: se autentica con el propio refresh token.
 
+### Claves de API (automatizaciones)
+
+Para integraciones máquina a máquina (n8n, scripts, cron, CI) sin gestionar la caducidad
+del JWT, cada usuario puede crear **claves de API** que se envían en la cabecera:
+
+```
+X-Api-Key: rk_Xk3pQ8aBcDeFgHiJkLmNoPqRsTuVwXyZ...
+```
+
+- La clave actúa **como el usuario que la crea**: mismos datos y permisos.
+- El valor completo (`rk_` + 43 caracteres aleatorios) **solo se muestra al crearla**;
+  la API guarda únicamente su hash SHA-256.
+- Caducidad opcional (`expiresInDays`, de 1 a 3650 días); si se omite, la clave no caduca.
+- El listado muestra `lastUsedAt` y la clave puede revocarse en cualquier momento
+  (deja de autenticar inmediatamente).
+
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| `POST` | `/api/v1/auth/api-keys` | Crear una clave (requiere autenticación) |
+| `GET` | `/api/v1/auth/api-keys` | Listar metadatos de las claves propias |
+| `DELETE` | `/api/v1/auth/api-keys/{id}` | Revocar una clave propia |
+
+```bash
+# Crear una clave (con JWT)
+curl -X POST http://localhost:8080/api/v1/auth/api-keys \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"n8n","expiresInDays":365}'
+
+# Usarla en cualquier endpoint protegido
+curl -X POST http://localhost:8080/api/v1/files/upload \
+  -H "X-Api-Key: rk_Xk3pQ8aB..." \
+  -F "file=@actividad.gpx"
+
+# Revocarla
+curl -X DELETE http://localhost:8080/api/v1/auth/api-keys/1 \
+  -H "Authorization: Bearer <token>"
+```
+
+> ⚠️ Trata la clave como una contraseña: da acceso completo a la cuenta. En n8n guárdala en un
+> credential o variable de entorno, nunca dentro del propio workflow.
+
 ### Usuario administrador
 
 Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
@@ -363,6 +417,17 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | `POST` | `/login` | ✅ | Iniciar sesión y obtener los tokens |
 | `POST` | `/refresh` | ✅ | Renovar el token de acceso con un refresh token |
 | `GET` | `/me` | ❌ | Datos del usuario autenticado |
+
+### Claves de API (`/api/v1/auth/api-keys`)
+
+| Método | Path | Descripción |
+|--------|------|-------------|
+| `POST` | `/` | Crear una clave de API (el valor solo se muestra una vez) |
+| `GET` | `/` | Listar las claves propias (nombre, prefijo, fechas; sin valores) |
+| `DELETE` | `/{id}` | Revocar una clave propia |
+
+> Se gestionan con JWT o con otra clave válida. Una clave revocada deja de autenticar de inmediato.
+> En endpoints protegidos se usa como alternativa a `Authorization`: `X-Api-Key: rk_...`.
 
 ### Archivos (`/api/v1/files`)
 
@@ -553,9 +618,9 @@ Y la especificación OpenAPI en formato JSON:
 http://localhost:8080/v3/api-docs
 ```
 
-Swagger UI incluye el esquema de seguridad **Bearer**. Para probar endpoints protegidos:
+Swagger UI incluye los esquemas de seguridad **Bearer** y **API Key** (`X-Api-Key`). Para probar endpoints protegidos:
 haz login en `/api/v1/auth/login`, copia el `token` y pulsa **Authorize** introduciendo
-`Bearer <token>`.
+`Bearer <token>`; o bien crea una clave en `/api/v1/auth/api-keys` e introdúcela en el campo de API Key.
 
 ---
 

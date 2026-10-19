@@ -2,6 +2,7 @@ package com.running.api.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.running.api.dto.ErrorResponseDto;
+import com.running.api.service.ApiKeyService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -26,6 +27,7 @@ import java.time.LocalDateTime;
 public class SecurityConfig {
 
     private final JwtService jwtService;
+    private final ApiKeyService apiKeyService;
     private final ObjectMapper objectMapper;
 
     @Bean
@@ -42,11 +44,12 @@ public class SecurityConfig {
                 .exceptionHandling(handling -> handling
                         .authenticationEntryPoint((request, response, ex) ->
                                 writeError(response, HttpServletResponse.SC_UNAUTHORIZED,
-                                        "No autenticado: se requiere un token JWT válido"))
+                                        "No autenticado: se requiere un token JWT o una clave de API válidos"))
                         .accessDeniedHandler((request, response, ex) ->
                                 writeError(response, HttpServletResponse.SC_FORBIDDEN,
                                         "Acceso denegado")))
-                .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService), UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 
