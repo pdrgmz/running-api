@@ -1,8 +1,10 @@
 package com.running.api.service;
 
 import com.running.api.dto.TrackpointCompletionResultDto;
+import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
+import com.running.api.util.DistanceSeries;
 import com.running.api.util.ElevationAccumulator;
 import com.running.api.util.RunningMetrics;
 import com.running.api.util.SeriesInterpolation;
@@ -25,6 +27,8 @@ import java.util.function.Predicate;
  *     <li>Latitud y longitud: interpolación lineal con los puntos GPS válidos vecinos.</li>
  *     <li>Altitud, frecuencia cardíaca, cadencia y velocidad: interpolación con los valores
  *     válidos vecinos (los extremos usan el vecino más cercano).</li>
+ *     <li>FC, cadencia y velocidad fuera de los rangos fisiológicos se descartan antes de
+ *     interpolar, para eliminar picos corruptos del sensor.</li>
  *     <li>Si toda la altitud es 0 o nula, se consulta un modelo digital de elevaciones
  *     (Open-Meteo) usando las coordenadas GPS y se interpolan las altitudes restantes.</li>
  * </ul>
@@ -36,7 +40,6 @@ import java.util.function.Predicate;
 public class TrackpointCompletionService {
 
     public static final double ALTITUDE_EPSILON = 1e-6;
-    private static final double MAX_PLAUSIBLE_SPEED_MPS = RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS;
 
     private final ElevationProvider elevationProvider;
     private final int elevationSampleEvery;
@@ -80,6 +83,83 @@ public class TrackpointCompletionService {
         return complete(activity, externalElevationOnImport);
     }
 
+    /**
+     * Completa únicamente la frecuencia cardíaca, la cadencia y la velocidad de los
+     * trackpoints usando los valores válidos vecinos. Antes de interpolar descarta los
+     * valores fuera de los rangos fisiológicos. No modifica coordenadas ni altitud y no
+     * consulta proveedores externos.
+     *
+     * @param activity actividad a completar (se modifica in-place)
+     * @return resumen de cuántos valores se completaron y se descartaron
+     */
+    public TrackpointMetricsCompletionResultDto completeMetrics(Activity activity) {
+        if (activity == null) {
+            return TrackpointMetricsCompletionResultDto.builder()
+                    .message("La actividad es nula")
+                    .build();
+        }
+
+        List<ActivityTrackpoint> points = activity.getTrackpoints();
+        if (points == null || points.isEmpty()) {
+            return TrackpointMetricsCompletionResultDto.builder()
+                    .activityId(activity.getId())
+                    .totalTrackpoints(0)
+                    .message("La actividad no tiene trackpoints")
+                    .build();
+        }
+
+        DistanceAdjustment distanceAdjustment = adjustDistances(points);
+
+        int heartRateRemoved = sanitizeIntegerField(points,
+                ActivityTrackpoint::getHeartRate,
+                ActivityTrackpoint::setHeartRate,
+                RunningMetrics::isPlausibleHeartRate);
+
+        int cadenceRemoved = sanitizeIntegerField(points,
+                ActivityTrackpoint::getCadence,
+                ActivityTrackpoint::setCadence,
+                RunningMetrics::isPlausibleCadence);
+
+        int speedRemoved = sanitizeSpeed(points);
+
+        int heartRateFilled = fillIntegerField(points,
+                ActivityTrackpoint::getHeartRate,
+                ActivityTrackpoint::setHeartRate,
+                value -> !RunningMetrics.isPlausibleHeartRate(value));
+
+        int cadenceFilled = fillIntegerField(points,
+                ActivityTrackpoint::getCadence,
+                ActivityTrackpoint::setCadence,
+                value -> !RunningMetrics.isPlausibleCadence(value));
+
+        int speedFilled = fillSpeed(points);
+
+        updateTelemetrySummary(activity, points);
+
+        int totalFilled = heartRateFilled + cadenceFilled + speedFilled;
+        int totalRemoved = heartRateRemoved + cadenceRemoved + speedRemoved;
+        String message = buildMessage(
+                "Frecuencia cardíaca, cadencia y velocidad completadas con datos de los puntos vecinos",
+                totalFilled, totalRemoved,
+                distanceAdjustment.adjustedPoints(), distanceAdjustment.discardedMeters());
+
+        return TrackpointMetricsCompletionResultDto.builder()
+                .activityId(activity.getId())
+                .totalTrackpoints(points.size())
+                .heartRateFilled(heartRateFilled)
+                .cadenceFilled(cadenceFilled)
+                .speedFilled(speedFilled)
+                .heartRateRemoved(heartRateRemoved)
+                .cadenceRemoved(cadenceRemoved)
+                .speedRemoved(speedRemoved)
+                .totalFilled(totalFilled)
+                .totalRemoved(totalRemoved)
+                .distanceAdjusted(distanceAdjustment.adjustedPoints())
+                .distanceDiscardedMeters(round(distanceAdjustment.discardedMeters(), 1))
+                .message(message)
+                .build();
+    }
+
     private TrackpointCompletionResultDto complete(Activity activity, boolean allowExternalElevation) {
         if (activity == null) {
             return TrackpointCompletionResultDto.builder()
@@ -109,15 +189,29 @@ public class TrackpointCompletionService {
                 value -> value == null || !Double.isFinite(value) || value < -180.0 || value > 180.0);
 
         AltitudeFillResult altitudeResult = fillAltitudes(points, allowExternalElevation);
+        DistanceAdjustment distanceAdjustment = adjustDistances(points);
+
+        int heartRateRemoved = sanitizeIntegerField(points,
+                ActivityTrackpoint::getHeartRate,
+                ActivityTrackpoint::setHeartRate,
+                RunningMetrics::isPlausibleHeartRate);
+
+        int cadenceRemoved = sanitizeIntegerField(points,
+                ActivityTrackpoint::getCadence,
+                ActivityTrackpoint::setCadence,
+                RunningMetrics::isPlausibleCadence);
+
+        int speedRemoved = sanitizeSpeed(points);
+
         int heartRateFilled = fillIntegerField(points,
                 ActivityTrackpoint::getHeartRate,
                 ActivityTrackpoint::setHeartRate,
-                value -> value == null || value <= 0);
+                value -> !RunningMetrics.isPlausibleHeartRate(value));
 
         int cadenceFilled = fillIntegerField(points,
                 ActivityTrackpoint::getCadence,
                 ActivityTrackpoint::setCadence,
-                value -> value == null || value <= 0);
+                value -> !RunningMetrics.isPlausibleCadence(value));
 
         int speedFilled = fillSpeed(points);
 
@@ -129,12 +223,13 @@ public class TrackpointCompletionService {
 
         int totalFilled = latitudeFilled + longitudeFilled + altitudeResult.filled()
                 + heartRateFilled + cadenceFilled + speedFilled;
+        int totalRemoved = heartRateRemoved + cadenceRemoved + speedRemoved;
 
-        String message = totalFilled == 0
-                ? "No había datos que completar"
-                : altitudeResult.external()
-                        ? "Trackpoints completados; altitud obtenida del modelo digital de elevaciones"
-                        : "Trackpoints completados con datos de los puntos vecinos";
+        String completedMessage = altitudeResult.external()
+                ? "Trackpoints completados; altitud obtenida del modelo digital de elevaciones"
+                : "Trackpoints completados con datos de los puntos vecinos";
+        String message = buildMessage(completedMessage, totalFilled, totalRemoved,
+                distanceAdjustment.adjustedPoints(), distanceAdjustment.discardedMeters());
 
         return TrackpointCompletionResultDto.builder()
                 .activityId(activity.getId())
@@ -145,6 +240,12 @@ public class TrackpointCompletionService {
                 .heartRateFilled(heartRateFilled)
                 .cadenceFilled(cadenceFilled)
                 .speedFilled(speedFilled)
+                .heartRateRemoved(heartRateRemoved)
+                .cadenceRemoved(cadenceRemoved)
+                .speedRemoved(speedRemoved)
+                .totalRemoved(totalRemoved)
+                .distanceAdjusted(distanceAdjustment.adjustedPoints())
+                .distanceDiscardedMeters(round(distanceAdjustment.discardedMeters(), 1))
                 .externalElevationUsed(altitudeResult.external())
                 .altitudeSource(altitudeSource)
                 .message(message)
@@ -217,12 +318,140 @@ public class TrackpointCompletionService {
         return applied;
     }
 
+    /**
+     * Descarta los valores de una serie entera que no estén dentro del rango fisiológico,
+     * dejándolos como huecos para que se interpolen con sus vecinos.
+     *
+     * @return número de valores descartados
+     */
+    private int sanitizeIntegerField(List<ActivityTrackpoint> points,
+                                     Function<ActivityTrackpoint, Integer> getter,
+                                     BiConsumer<ActivityTrackpoint, Integer> setter,
+                                     Predicate<Integer> isPlausible) {
+        int removed = 0;
+        for (ActivityTrackpoint point : points) {
+            Integer value = getter.apply(point);
+            if (value != null && !isPlausible.test(value)) {
+                setter.accept(point, null);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * Ajusta la distancia acumulada de los trackpoints descartando retrocesos y saltos que
+     * implicarían una velocidad superior a la máxima plausible. Los valores corregidos se
+     * escriben en los propios puntos.
+     *
+     * @return número de puntos ajustados y metros descartados
+     */
+    private DistanceAdjustment adjustDistances(List<ActivityTrackpoint> points) {
+        int size = points.size();
+        double[] original = new double[size];
+        boolean[] hasOriginal = new boolean[size];
+        boolean[] invalidOriginal = new boolean[size];
+        boolean hasAnyValid = false;
+        int invalidCount = 0;
+
+        for (int i = 0; i < size; i++) {
+            Double distance = points.get(i).getDistanceMeters();
+            if (distance == null) {
+                continue;
+            }
+            if (!Double.isFinite(distance) || distance < 0.0) {
+                invalidOriginal[i] = true;
+                invalidCount++;
+                points.get(i).setDistanceMeters(null);
+            } else {
+                original[i] = distance;
+                hasOriginal[i] = true;
+                hasAnyValid = true;
+            }
+        }
+
+        if (!hasAnyValid) {
+            return new DistanceAdjustment(invalidCount, 0.0);
+        }
+
+        double[] adjusted = DistanceSeries.reconstructPerPoint(
+                points, RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS);
+
+        int adjustedPoints = 0;
+        double discardedMeters = 0.0;
+
+        for (int i = 0; i < size; i++) {
+            if (invalidOriginal[i] || !hasOriginal[i] || Math.abs(original[i] - adjusted[i]) > 1e-6) {
+                adjustedPoints++;
+            }
+
+            if (i > 0 && hasOriginal[i] && hasOriginal[i - 1]) {
+                double originalIncrement = original[i] - original[i - 1];
+                double adjustedIncrement = adjusted[i] - adjusted[i - 1];
+                if (originalIncrement > adjustedIncrement) {
+                    discardedMeters += originalIncrement - adjustedIncrement;
+                }
+            }
+
+            points.get(i).setDistanceMeters(adjusted[i]);
+        }
+
+        return new DistanceAdjustment(adjustedPoints, discardedMeters);
+    }
+
+    /**
+     * Descarta las velocidades no finitas, no positivas o superiores al máximo plausible.
+     *
+     * @return número de valores descartados
+     */
+    private int sanitizeSpeed(List<ActivityTrackpoint> points) {
+        int removed = 0;
+        for (ActivityTrackpoint point : points) {
+            Double speed = point.getSpeed();
+            if (speed != null && !RunningMetrics.isPlausibleSpeed(speed)) {
+                point.setSpeed(null);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    private static String buildMessage(String completedMessage, int totalFilled, int totalRemoved,
+                                       int distanceAdjusted, double distanceDiscardedMeters) {
+        StringBuilder message = new StringBuilder();
+
+        if (totalFilled == 0 && totalRemoved == 0 && distanceAdjusted == 0) {
+            return "No había datos que completar";
+        }
+
+        if (totalFilled == 0 && totalRemoved > 0) {
+            message.append("Se descartaron ").append(totalRemoved)
+                    .append(" valores fuera de rango; no había puntos vecinos para interpolar");
+        } else if (totalFilled > 0) {
+            message.append(completedMessage);
+            if (totalRemoved > 0) {
+                message.append("; se descartaron ").append(totalRemoved).append(" valores fuera de rango");
+            }
+        }
+
+        if (distanceAdjusted > 0) {
+            if (!message.isEmpty()) {
+                message.append("; ");
+            }
+            message.append("se ajustaron ").append(distanceAdjusted).append(" distancias");
+            if (distanceDiscardedMeters > 0) {
+                message.append(" (").append(round(distanceDiscardedMeters, 1)).append(" m descartados)");
+            }
+        }
+
+        return message.toString();
+    }
+
     private int fillSpeed(List<ActivityTrackpoint> points) {
         int filled = fillDoubleField(points,
                 ActivityTrackpoint::getSpeed,
                 ActivityTrackpoint::setSpeed,
-                value -> value == null || !Double.isFinite(value)
-                        || value <= 0.0 || value > MAX_PLAUSIBLE_SPEED_MPS);
+                value -> !RunningMetrics.isPlausibleSpeed(value));
 
         if (filled > 0) {
             for (ActivityTrackpoint point : points) {
@@ -289,7 +518,7 @@ public class TrackpointCompletionService {
             }
 
             double speed = (current.getDistanceMeters() - previous.getDistanceMeters()) / seconds;
-            if (speed > 0.0 && speed <= MAX_PLAUSIBLE_SPEED_MPS) {
+            if (RunningMetrics.isPlausibleSpeed(speed)) {
                 current.setSpeed(round(speed, 3));
                 filled++;
             }
@@ -444,6 +673,11 @@ public class TrackpointCompletionService {
 
     private void updateActivitySummary(Activity activity, List<ActivityTrackpoint> points,
                                        boolean externalElevationUsed) {
+        updateTelemetrySummary(activity, points);
+        updateElevationMetrics(activity, points, externalElevationUsed);
+    }
+
+    private void updateTelemetrySummary(Activity activity, List<ActivityTrackpoint> points) {
         int heartRateCount = 0;
         int heartRateSum = 0;
         int heartRateMax = 0;
@@ -454,44 +688,71 @@ public class TrackpointCompletionService {
 
         for (ActivityTrackpoint point : points) {
             Integer heartRate = point.getHeartRate();
-            if (heartRate != null && heartRate > 0) {
+            if (RunningMetrics.isPlausibleHeartRate(heartRate)) {
                 heartRateCount++;
                 heartRateSum += heartRate;
                 heartRateMax = Math.max(heartRateMax, heartRate);
             }
 
             Integer cadence = point.getCadence();
-            if (cadence != null && cadence > 0) {
+            if (RunningMetrics.isPlausibleCadence(cadence)) {
                 cadenceCount++;
                 cadenceSum += cadence;
                 cadenceMax = Math.max(cadenceMax, cadence);
             }
 
             Double speed = point.getSpeed();
-            if (speed != null && speed > 0.0 && speed <= MAX_PLAUSIBLE_SPEED_MPS) {
+            if (RunningMetrics.isPlausibleSpeed(speed)) {
                 maxSpeed = Math.max(maxSpeed, speed);
             }
         }
 
         if (heartRateCount > 0) {
             activity.setAvgHeartRate((int) Math.round((double) heartRateSum / heartRateCount));
-            if (activity.getMaxHeartRate() == null || heartRateMax > activity.getMaxHeartRate()) {
+            if (activity.getMaxHeartRate() == null
+                    || !RunningMetrics.isPlausibleHeartRate(activity.getMaxHeartRate())
+                    || heartRateMax > activity.getMaxHeartRate()) {
                 activity.setMaxHeartRate(heartRateMax);
+            }
+        } else {
+            if (activity.getAvgHeartRate() != null
+                    && !RunningMetrics.isPlausibleHeartRate(activity.getAvgHeartRate())) {
+                activity.setAvgHeartRate(null);
+            }
+            if (activity.getMaxHeartRate() != null
+                    && !RunningMetrics.isPlausibleHeartRate(activity.getMaxHeartRate())) {
+                activity.setMaxHeartRate(null);
             }
         }
 
         if (cadenceCount > 0) {
             activity.setAvgCadence((int) Math.round((double) cadenceSum / cadenceCount));
-            if (activity.getMaxCadence() == null || cadenceMax > activity.getMaxCadence()) {
+            if (activity.getMaxCadence() == null
+                    || !RunningMetrics.isPlausibleCadence(activity.getMaxCadence())
+                    || cadenceMax > activity.getMaxCadence()) {
                 activity.setMaxCadence(cadenceMax);
+            }
+        } else {
+            if (activity.getAvgCadence() != null
+                    && !RunningMetrics.isPlausibleCadence(activity.getAvgCadence())) {
+                activity.setAvgCadence(null);
+            }
+            if (activity.getMaxCadence() != null
+                    && !RunningMetrics.isPlausibleCadence(activity.getMaxCadence())) {
+                activity.setMaxCadence(null);
             }
         }
 
         if (maxSpeed > 0.0) {
             double roundedMaxSpeed = round(maxSpeed, 2);
-            if (activity.getMaxSpeed() == null || roundedMaxSpeed > activity.getMaxSpeed()) {
+            if (activity.getMaxSpeed() == null
+                    || !RunningMetrics.isPlausibleSpeed(activity.getMaxSpeed())
+                    || roundedMaxSpeed > activity.getMaxSpeed()) {
                 activity.setMaxSpeed(roundedMaxSpeed);
             }
+        } else if (activity.getMaxSpeed() != null
+                && !RunningMetrics.isPlausibleSpeed(activity.getMaxSpeed())) {
+            activity.setMaxSpeed(null);
         }
 
         if (activity.getAvgSpeed() == null
@@ -510,8 +771,6 @@ public class TrackpointCompletionService {
                 && activity.getMaxSpeed() != null && activity.getMaxSpeed() > 0.0) {
             activity.setMaxPaceMinPerKm(round(1000.0 / (activity.getMaxSpeed() * 60.0), 2));
         }
-
-        updateElevationMetrics(activity, points, externalElevationUsed);
     }
 
     /**
@@ -600,8 +859,7 @@ public class TrackpointCompletionService {
     }
 
     private static boolean isMissingSpeed(Double speed) {
-        return speed == null || !Double.isFinite(speed) || speed <= 0.0
-                || speed > MAX_PLAUSIBLE_SPEED_MPS;
+        return !RunningMetrics.isPlausibleSpeed(speed);
     }
 
     private static double round(double value, int decimals) {
@@ -610,5 +868,8 @@ public class TrackpointCompletionService {
     }
 
     private record AltitudeFillResult(int filled, boolean external) {
+    }
+
+    private record DistanceAdjustment(int adjustedPoints, double discardedMeters) {
     }
 }

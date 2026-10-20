@@ -69,4 +69,33 @@ class RunningMetricsTest {
     void nullSportIsNotRunning() {
         assertThat(RunningMetrics.isRunningSport(null)).isFalse();
     }
+
+    @Test
+    void validatesPlausibleHeartRate() {
+        assertThat(RunningMetrics.isPlausibleHeartRate(30)).isTrue();
+        assertThat(RunningMetrics.isPlausibleHeartRate(240)).isTrue();
+        assertThat(RunningMetrics.isPlausibleHeartRate(29)).isFalse();
+        assertThat(RunningMetrics.isPlausibleHeartRate(241)).isFalse();
+        assertThat(RunningMetrics.isPlausibleHeartRate(null)).isFalse();
+    }
+
+    @Test
+    void validatesPlausibleCadence() {
+        assertThat(RunningMetrics.isPlausibleCadence(30)).isTrue();
+        assertThat(RunningMetrics.isPlausibleCadence(240)).isTrue();
+        assertThat(RunningMetrics.isPlausibleCadence(29)).isFalse();
+        assertThat(RunningMetrics.isPlausibleCadence(241)).isFalse();
+        assertThat(RunningMetrics.isPlausibleCadence(null)).isFalse();
+    }
+
+    @Test
+    void validatesPlausibleSpeed() {
+        assertThat(RunningMetrics.isPlausibleSpeed(0.1)).isTrue();
+        assertThat(RunningMetrics.isPlausibleSpeed(15.0)).isTrue();
+        assertThat(RunningMetrics.isPlausibleSpeed(0.0)).isFalse();
+        assertThat(RunningMetrics.isPlausibleSpeed(-1.0)).isFalse();
+        assertThat(RunningMetrics.isPlausibleSpeed(15.1)).isFalse();
+        assertThat(RunningMetrics.isPlausibleSpeed(Double.NaN)).isFalse();
+        assertThat(RunningMetrics.isPlausibleSpeed(null)).isFalse();
+    }
 }

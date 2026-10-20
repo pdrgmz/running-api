@@ -2,6 +2,7 @@ package com.running.api.service;
 
 import com.running.api.dto.ElevationCoverageDto;
 import com.running.api.dto.TrackpointCompletionResultDto;
+import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.model.GlobalSummaryStats;
@@ -116,6 +117,27 @@ public class ActivityService {
 
         // La actividad ya está gestionada por JPA; los cambios se persisten al hacer commit.
         // El resumen global puede cambiar si se completó la altitud o la frecuencia cardíaca.
+        fileService.recalculateAllStats(userId);
+
+        return Optional.of(result);
+    }
+
+    /**
+     * Completa únicamente la frecuencia cardíaca, la cadencia y la velocidad de una actividad
+     * ya almacenada. No modifica las coordenadas ni la altitud, por lo que no consume cuota
+     * de proveedores externos.
+     */
+    @Transactional
+    public Optional<TrackpointMetricsCompletionResultDto> completeActivityMetrics(Long userId, String id) {
+        Optional<Activity> activityOpt = activityRepository.findByIdAndUserId(id, userId);
+        if (activityOpt.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Activity activity = activityOpt.get();
+        TrackpointMetricsCompletionResultDto result = trackpointCompletionService.completeMetrics(activity);
+
+        // La FC máxima agregada del usuario puede cambiar; el resto de métricas no.
         fileService.recalculateAllStats(userId);
 
         return Optional.of(result);

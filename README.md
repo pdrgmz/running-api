@@ -130,6 +130,7 @@ src/main/java/com/running/api/
 │   ├── StreakStatsDto.java
 │   ├── SummaryStatsDto.java
 │   ├── TrackpointCompletionResultDto.java # Resumen del completado de telemetría
+│   ├── TrackpointMetricsCompletionResultDto.java # Resumen del completado de FC/cadencia/velocidad
 │   ├── TrainingLoadResponseDto.java
 │   ├── UserResponseDto.java     # Datos públicos del usuario
 │   ├── Vo2MaxVamResponseDto.java
@@ -482,6 +483,7 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | `GET` | `/{id}` | Obtener actividad por ID |
 | `GET` | `/{id}/trackpoints` | Obtener trackpoints (con `?resolution=`) |
 | `POST` | `/{id}/complete-trackpoints` | Completar huecos de telemetría y altitudes 0/nulas |
+| `POST` | `/{id}/complete-metrics` | Completar FC, cadencia y velocidad, y ajustar la distancia |
 | `DELETE` | `/{id}` | Eliminar actividad por ID |
 | `DELETE` | `/` | Vaciar toda la base de datos |
 
@@ -493,7 +495,12 @@ actividad ya almacenada:
 - **Latitud/longitud**: interpolación lineal entre los puntos GPS válidos vecinos.
 - **Altitud, FC, cadencia y velocidad**: interpolación lineal; los extremos usan el valor del
   vecino más cercano.
+- **Valores fuera de rango**: se descartan antes de interpolar (FC 30–240 bpm, cadencia
+  30–240 spm y velocidad mayor que 0 y menor o igual a 15 m/s). Si no hay vecinos válidos,
+  el valor queda vacío.
 - **Velocidad sin datos**: se deriva de la distancia acumulada y el tiempo.
+- **Distancia acumulada**: se descartan los retrocesos y saltos entre puntos que implicarían
+  una velocidad superior a 15 m/s, recalculando la serie de forma monótona.
 - **Altitud toda a 0 o nula**: se consultan las coordenadas en Open-Meteo (Copernicus DEM,
   ~90 m) y se interpolan las altitudes restantes. Se puede desactivar con
   `APP_ELEVATION_EXTERNAL_ENABLED=false`.
@@ -578,6 +585,45 @@ consume cuota de Open-Meteo en ese momento. Para el día a día, deja que actúe
 ```bash
 curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/complete-trackpoints \
   -H "Authorization: Bearer <token>"
+```
+
+#### Completado de métricas (FC, cadencia, velocidad y distancia)
+
+`POST /api/v1/activities/{id}/complete-metrics` rellena la frecuencia cardíaca, la cadencia
+y la velocidad, y ajusta la distancia acumulada de una actividad ya almacenada:
+
+- Antes de interpolar, **detecta y descarta valores fuera de rango**: FC 30–240 bpm,
+  cadencia 30–240 spm y velocidad mayor que 0 y menor o igual a 15 m/s (54 km/h).
+- Cada serie se interpola linealmente entre sus valores válidos vecinos.
+- Los huecos iniciales y finales usan el valor válido más cercano.
+- La velocidad sin datos se deriva de la distancia acumulada y el tiempo.
+- Si una serie se queda sin valores válidos, sus puntos quedan vacíos (no se inventan datos).
+- **Distancia acumulada**: descarta retrocesos y saltos entre puntos que implicarían más de
+  15 m/s, recalculando la serie de forma monótona.
+- Corrige los valores medios y máximos de la actividad si alguno estaba fuera de rango.
+- **No modifica** coordenadas ni altitud y **no consulta** proveedores externos.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/complete-metrics \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "activityId": "2026-09-05T07:00:00Z",
+  "totalTrackpoints": 3600,
+  "heartRateFilled": 15,
+  "cadenceFilled": 8,
+  "speedFilled": 4,
+  "heartRateRemoved": 2,
+  "cadenceRemoved": 1,
+  "speedRemoved": 3,
+  "totalFilled": 27,
+  "totalRemoved": 6,
+  "distanceAdjusted": 3,
+  "distanceDiscardedMeters": 4900.0,
+  "message": "Frecuencia cardíaca, cadencia y velocidad completadas con datos de los puntos vecinos; se descartaron 6 valores fuera de rango; se ajustaron 3 distancias (4900.0 m descartados)"
+}
 ```
 
 ### Estadísticas (`/api/v1/stats`)

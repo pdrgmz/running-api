@@ -37,6 +37,24 @@ public class TrackpointCompletionResultDto {
     @Schema(description = "Puntos cuya velocidad se completó", example = "4")
     private int speedFilled;
 
+    @Schema(description = "Valores de frecuencia cardíaca fuera de rango descartados", example = "2")
+    private int heartRateRemoved;
+
+    @Schema(description = "Valores de cadencia fuera de rango descartados", example = "1")
+    private int cadenceRemoved;
+
+    @Schema(description = "Valores de velocidad fuera de rango descartados", example = "3")
+    private int speedRemoved;
+
+    @Schema(description = "Total de valores fuera de rango descartados", example = "6")
+    private int totalRemoved;
+
+    @Schema(description = "Puntos cuya distancia acumulada se ajustó", example = "3")
+    private int distanceAdjusted;
+
+    @Schema(description = "Metros descartados por incrementos de distancia imposibles", example = "4900.0")
+    private double distanceDiscardedMeters;
+
     @Schema(description = "Indica si la altitud se obtuvo de un proveedor externo (DEM)", example = "true")
     private boolean externalElevationUsed;
 

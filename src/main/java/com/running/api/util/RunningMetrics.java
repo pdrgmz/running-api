@@ -15,6 +15,21 @@ public final class RunningMetrics {
      */
     public static final double MAX_PLAUSIBLE_SPEED_MPS = 15.0;
 
+    /**
+     * Rango fisiológico aceptado para la frecuencia cardíaca. Los valores fuera de este
+     * intervalo se consideran lecturas corruptas del sensor (p. ej. 0 o 255) y se descartan
+     * antes de interpolar.
+     */
+    public static final int MIN_PLAUSIBLE_HEART_RATE_BPM = 30;
+    public static final int MAX_PLAUSIBLE_HEART_RATE_BPM = 240;
+
+    /**
+     * Rango fisiológico aceptado para la cadencia de carrera. Los valores fuera de este
+     * intervalo se consideran lecturas corruptas del sensor y se descartan.
+     */
+    public static final int MIN_PLAUSIBLE_CADENCE_SPM = 30;
+    public static final int MAX_PLAUSIBLE_CADENCE_SPM = 240;
+
     private static final double MIN_SPEED_FOR_VO2_MS = 1.0;
     private static final double MIN_VALID_VO2 = 20.0;
     private static final double MAX_VALID_VO2 = 100.0;
@@ -71,6 +86,32 @@ public final class RunningMetrics {
             return null;
         }
         return Math.round(vo2 * 10.0) / 10.0;
+    }
+
+    /**
+     * @return {@code true} si la frecuencia cardíaca está dentro del rango fisiológico.
+     */
+    public static boolean isPlausibleHeartRate(Integer heartRate) {
+        return heartRate != null
+                && heartRate >= MIN_PLAUSIBLE_HEART_RATE_BPM
+                && heartRate <= MAX_PLAUSIBLE_HEART_RATE_BPM;
+    }
+
+    /**
+     * @return {@code true} si la cadencia está dentro del rango fisiológico.
+     */
+    public static boolean isPlausibleCadence(Integer cadence) {
+        return cadence != null
+                && cadence >= MIN_PLAUSIBLE_CADENCE_SPM
+                && cadence <= MAX_PLAUSIBLE_CADENCE_SPM;
+    }
+
+    /**
+     * @return {@code true} si la velocidad es positiva y no supera el máximo plausible.
+     */
+    public static boolean isPlausibleSpeed(Double speed) {
+        return speed != null && Double.isFinite(speed)
+                && speed > 0.0 && speed <= MAX_PLAUSIBLE_SPEED_MPS;
     }
 
     /**
