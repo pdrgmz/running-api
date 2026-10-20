@@ -1,6 +1,8 @@
 package com.running.api.controller;
 
+import com.running.api.dto.ElevationCoverageDto;
 import com.running.api.dto.ErrorResponseDto;
+import com.running.api.dto.TrackpointCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.security.UserPrincipal;
@@ -23,6 +25,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -50,6 +53,21 @@ public class ActivityController {
             @AuthenticationPrincipal UserPrincipal principal,
             @ParameterObject @PageableDefault(page = 0, size = 20, sort = "startTime", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(activityService.getAllActivities(principal.id(), pageable));
+    }
+
+    @GetMapping("/elevation-coverage")
+    @Operation(summary = "Obtener la cobertura de altitudes de los trackpoints",
+               description = "Devuelve cuántos trackpoints tienen altitud y cuántos la tienen pendiente, "
+                       + "con sus porcentajes. Una altitud nula o 0 se considera pendiente, igual que en "
+                       + "el cron de completado.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Cobertura calculada"),
+            @ApiResponse(responseCode = "401", description = "No autenticado o token inválido",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<ElevationCoverageDto> getElevationCoverage(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(activityService.getElevationCoverage(principal.id()));
     }
 
     @GetMapping("/{id}")
@@ -88,6 +106,25 @@ public class ActivityController {
             return ResponseEntity.notFound().build();
         }
         return ResponseEntity.ok(trackpoints);
+    }
+
+    @PostMapping("/{id}/complete-trackpoints")
+    @Operation(summary = "Completar los datos que falten en los trackpoints de una carrera",
+               description = "Rellena latitud, longitud, altitud, frecuencia cardíaca, cadencia y velocidad "
+                       + "interpolando con los puntos vecinos. Si toda la altitud es 0 o nula, consulta un "
+                       + "modelo digital de elevaciones usando las coordenadas GPS.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Trackpoints completados"),
+            @ApiResponse(responseCode = "404", description = "La actividad no existe o no pertenece al usuario",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<TrackpointCompletionResultDto> completeTrackpoints(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Parameter(description = "ID de la actividad a completar", example = "2026-09-05T07:00:00Z")
+            @PathVariable String id) {
+        return activityService.completeActivityTrackpoints(principal.id(), id)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @DeleteMapping

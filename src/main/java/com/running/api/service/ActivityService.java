@@ -1,5 +1,7 @@
 package com.running.api.service;
 
+import com.running.api.dto.ElevationCoverageDto;
+import com.running.api.dto.TrackpointCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.model.GlobalSummaryStats;
@@ -7,6 +9,7 @@ import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
 import com.running.api.repository.PersonalRecordRepository;
+import com.running.api.repository.projection.ElevationCoverageProjection;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -30,10 +33,49 @@ public class ActivityService {
     private final BackupStorageService backupStorageService;
     private final FileService fileService;
     private final StatsService statsService;
+    private final TrackpointCompletionService trackpointCompletionService;
 
     @Transactional(readOnly = true)
     public Page<Activity> getAllActivities(Long userId, Pageable pageable) {
         return activityRepository.findByUserId(userId, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public ElevationCoverageDto getElevationCoverage(Long userId) {
+        ElevationCoverageProjection coverage = trackpointRepository.getElevationCoverage(
+                userId, TrackpointCompletionService.ALTITUDE_EPSILON);
+
+        long total = coverage == null || coverage.getTotalTrackpoints() == null
+                ? 0L
+                : coverage.getTotalTrackpoints();
+        long withElevation = coverage == null || coverage.getTrackpointsWithElevation() == null
+                ? 0L
+                : coverage.getTrackpointsWithElevation();
+
+        return buildElevationCoverage(total, withElevation);
+    }
+
+    static ElevationCoverageDto buildElevationCoverage(long total, long withElevation) {
+        long validWithElevation = Math.min(Math.max(withElevation, 0L), total);
+        long missing = Math.max(0L, total - validWithElevation);
+        double withPercent = total == 0
+                ? 0.0
+                : roundPercentage(validWithElevation * 100.0 / total);
+        double missingPercent = total == 0
+                ? 0.0
+                : roundPercentage(100.0 - withPercent);
+
+        return ElevationCoverageDto.builder()
+                .totalTrackpoints(total)
+                .trackpointsWithElevation(validWithElevation)
+                .trackpointsMissingElevation(missing)
+                .withElevationPercent(withPercent)
+                .missingElevationPercent(missingPercent)
+                .build();
+    }
+
+    private static double roundPercentage(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     @Transactional(readOnly = true)
@@ -55,6 +97,28 @@ public class ActivityService {
             return points;
         }
         return downsampleTrackpoints(points, resolution);
+    }
+
+    /**
+     * Completa los huecos de telemetría de una actividad ya almacenada y recalcula sus
+     * estadísticas agregadas. Los trackpoints se actualizan por dirty checking dentro de
+     * la transacción.
+     */
+    @Transactional
+    public Optional<TrackpointCompletionResultDto> completeActivityTrackpoints(Long userId, String id) {
+        Optional<Activity> activityOpt = activityRepository.findByIdAndUserId(id, userId);
+        if (activityOpt.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Activity activity = activityOpt.get();
+        TrackpointCompletionResultDto result = trackpointCompletionService.complete(activity);
+
+        // La actividad ya está gestionada por JPA; los cambios se persisten al hacer commit.
+        // El resumen global puede cambiar si se completó la altitud o la frecuencia cardíaca.
+        fileService.recalculateAllStats(userId);
+
+        return Optional.of(result);
     }
 
     private List<ActivityTrackpoint> downsampleTrackpoints(List<ActivityTrackpoint> points, String resolution) {

@@ -85,4 +85,23 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
 
     @Query("SELECT MIN(CAST(a.startTime AS java.time.LocalDate)) FROM Activity a WHERE a.userId = :userId")
     Optional<LocalDate> findEarliestActivityDate(@Param("userId") Long userId);
+
+    /**
+     * Actividades con al menos un trackpoint sin altitud utilizable y con coordenadas válidas.
+     * Se ordenan de más antigua a más reciente para que el cron no deje datos históricos atrás.
+     */
+    @Query("""
+        SELECT a.id FROM Activity a
+        WHERE EXISTS (
+            SELECT 1 FROM ActivityTrackpoint t
+            WHERE t.activity.id = a.id
+              AND (t.altitudeMeters IS NULL
+                   OR (ABS(t.altitudeMeters) < :epsilon
+                       AND (t.elevationCalculated IS NULL OR t.elevationCalculated = false)))
+              AND t.latitude IS NOT NULL
+              AND t.longitude IS NOT NULL
+        )
+        ORDER BY a.startTime ASC
+        """)
+    List<String> findActivityIdsWithMissingAltitude(@Param("epsilon") double epsilon, Pageable pageable);
 }

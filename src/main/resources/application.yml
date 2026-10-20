@@ -41,6 +41,33 @@ app:
     max-hr: 185 # Pulsaciones máximas por defecto para zonas FC
   elevation:
     min-threshold-meters: 0.1 # Umbral de histéresis para filtrar ruido GPS en elevación
+    # Completa altitudes nulas/0 consultando un modelo digital de elevaciones (Open-Meteo).
+    external-enabled: ${APP_ELEVATION_EXTERNAL_ENABLED:true}
+    api-url: ${APP_ELEVATION_API_URL:https://api.open-meteo.com/v1/elevation}
+    # Opcional. Si se define, se usa customer-api.open-meteo.com y se envía como apikey.
+    api-key: ${APP_ELEVATION_API_KEY:}
+    # En importación solo se interpolan altitudes existentes; el DEM externo lo hace el cron.
+    external-on-import: ${APP_ELEVATION_EXTERNAL_ON_IMPORT:false}
+    # Open-Meteo cuenta una llamada por coordenada (límite gratuito: 600/min).
+    batch-size: ${APP_ELEVATION_BATCH_SIZE:50}
+    timeout-seconds: ${APP_ELEVATION_TIMEOUT_SECONDS:10}
+    # Consulta 1 de cada N puntos y interpola el resto (el DEM tiene ~90 m de resolución).
+    sample-every: ${APP_ELEVATION_SAMPLE_EVERY:30}
+    min-interval-millis: ${APP_ELEVATION_MIN_INTERVAL_MILLIS:100}
+    # Presupuesto propio por debajo de las 600 llamadas/min de Open-Meteo.
+    max-calls-per-minute: ${APP_ELEVATION_MAX_CALLS_PER_MINUTE:500}
+    max-retries: ${APP_ELEVATION_MAX_RETRIES:2}
+    retry-backoff-millis: ${APP_ELEVATION_RETRY_BACKOFF_MILLIS:2000}
+    max-retry-after-seconds: ${APP_ELEVATION_MAX_RETRY_AFTER_SECONDS:60}
+    # Backfill diferido de altitudes.
+    # 80 coordenadas cada 15 min = 7.680/día y ~230.400/mes, con margen sobre
+    # los límites de 10.000/día y 300.000/mes.
+    backfill:
+      enabled: ${APP_ELEVATION_BACKFILL_ENABLED:true}
+      cron: ${APP_ELEVATION_BACKFILL_CRON:0 */15 * * * *}
+      max-calls-per-run: ${APP_ELEVATION_BACKFILL_MAX_CALLS_PER_RUN:80}
+      max-activities-per-run: ${APP_ELEVATION_BACKFILL_MAX_ACTIVITIES_PER_RUN:50}
+      sample-distance-meters: ${APP_ELEVATION_BACKFILL_SAMPLE_DISTANCE_METERS:90}
   cors:
     allowed-origins: http://localhost:3000,http://localhost:5173,https://running-api.pdrgmz.uk,http://running-api.pdrgmz.uk
   openapi:

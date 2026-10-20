@@ -54,6 +54,15 @@ public class ActivityTrackpoint {
     @Schema(description = "Altitud en metros", example = "650.0")
     private Double altitudeMeters;
 
+    /**
+     * Indica que la altitud fue calculada por el completado (interpolación o modelo digital).
+     * Permite distinguir un 0 real (nivel del mar) de un 0 usado como valor ausente en el
+     * archivo original.
+     */
+    @JsonIgnore
+    @Schema(hidden = true)
+    private Boolean elevationCalculated;
+
     @Schema(description = "Distancia acumulada desde el inicio en metros", example = "1250.5")
     private Double distanceMeters;
 

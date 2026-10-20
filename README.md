@@ -57,6 +57,10 @@
 - Listado paginado y ordenado de carreras
 - Consulta de detalle por ID
 - Trackpoints con muestreo opcional (`low`, `medium`, `high`)
+- Completado de telemetría: rellena latitud, longitud, altitud, FC, cadencia y velocidad
+  interpolando con los puntos vecinos
+- Si falta altitud, un cron la completa con el modelo digital de elevaciones de Open-Meteo
+  a partir de las coordenadas GPS, respetando la cuota del proveedor
 - Eliminación individual o total de la base de datos
 
 ### Estadísticas y Récords
@@ -125,6 +129,7 @@ src/main/java/com/running/api/
 │   ├── SplitDto.java
 │   ├── StreakStatsDto.java
 │   ├── SummaryStatsDto.java
+│   ├── TrackpointCompletionResultDto.java # Resumen del completado de telemetría
 │   ├── TrainingLoadResponseDto.java
 │   ├── UserResponseDto.java     # Datos públicos del usuario
 │   ├── Vo2MaxVamResponseDto.java
@@ -177,11 +182,15 @@ src/main/java/com/running/api/
 │   ├── GeoService.java
 │   ├── GpxParserService.java
 │   ├── StatsService.java
-│   └── TcxParserService.java
+│   ├── TcxParserService.java
+│   ├── TrackpointCompletionService.java # Rellena huecos de telemetría
+│   ├── ElevationProvider.java           # Puerto de proveedores de elevación
+│   └── OpenMeteoElevationProvider.java  # DEM real vía Open-Meteo
 ├── util/
 │   ├── ElevationAccumulator.java # Desnivel D+/D- con histéresis (filtro de ruido)
 │   ├── GeoUtils.java             # Distancia Haversine
-│   └── RunningMetrics.java       # TRIMP / VAM / VO2Max / detección de deporte
+│   ├── RunningMetrics.java       # TRIMP / VAM / VO2Max / detección de deporte
+│   └── SeriesInterpolation.java  # Relleno lineal de series con huecos
 └── RunningApiApplication.java
 ```
 
@@ -200,6 +209,23 @@ src/main/java/com/running/api/
 | `APP_STORAGE_LOCATION` | `./storage` | Ruta de respaldo de archivos de actividad |
 | `APP_USER_MAX_HR` | `185` | Frecuencia cardíaca máxima para zonas FC |
 | `APP_ELEVATION_MIN_THRESHOLD_METERS` | `0.1` | Umbral de histéresis para filtrar ruido GPS |
+| `APP_ELEVATION_EXTERNAL_ENABLED` | `true` | Consultar un DEM externo cuando toda la altitud sea 0/nula |
+| `APP_ELEVATION_API_URL` | `https://api.open-meteo.com/v1/elevation` | Endpoint del proveedor de elevaciones |
+| `APP_ELEVATION_API_KEY` | *(vacío)* | API key opcional; si se define, usa el endpoint de cliente |
+| `APP_ELEVATION_EXTERNAL_ON_IMPORT` | `false` | Consultar el DEM durante la importación; el cron lo hace por defecto |
+| `APP_ELEVATION_BATCH_SIZE` | `50` | Coordenadas por petición al proveedor |
+| `APP_ELEVATION_TIMEOUT_SECONDS` | `10` | Timeout de las peticiones de elevación |
+| `APP_ELEVATION_SAMPLE_EVERY` | `30` | Se consulta 1 de cada N puntos y se interpola el resto |
+| `APP_ELEVATION_MIN_INTERVAL_MILLIS` | `100` | Espera mínima entre peticiones al proveedor |
+| `APP_ELEVATION_MAX_CALLS_PER_MINUTE` | `500` | Presupuesto de coordenadas por minuto (límite gratuito: 600) |
+| `APP_ELEVATION_MAX_RETRIES` | `2` | Reintentos ante 429 o errores 5xx |
+| `APP_ELEVATION_RETRY_BACKOFF_MILLIS` | `2000` | Backoff inicial entre reintentos |
+| `APP_ELEVATION_MAX_RETRY_AFTER_SECONDS` | `60` | Espera máxima que se respeta de `Retry-After` |
+| `APP_ELEVATION_BACKFILL_ENABLED` | `true` | Activar el cron de completado de altitudes |
+| `APP_ELEVATION_BACKFILL_CRON` | `0 */15 * * * *` | Ejecución cada 15 minutos |
+| `APP_ELEVATION_BACKFILL_MAX_CALLS_PER_RUN` | `80` | Coordenadas máximas por ejecución |
+| `APP_ELEVATION_BACKFILL_MAX_ACTIVITIES_PER_RUN` | `50` | Actividades máximas a revisar por ejecución |
+| `APP_ELEVATION_BACKFILL_SAMPLE_DISTANCE_METERS` | `90` | Separación mínima entre coordenadas consultadas |
 | `APP_JWT_SECRET` | *(clave de desarrollo)* | Clave de firma de los JWT (HS256). **Obligatorio cambiarla en producción** |
 | `APP_JWT_EXPIRATION_MINUTES` | `1440` | Vigencia del token de acceso en minutos (24 h) |
 | `APP_JWT_REFRESH_EXPIRATION_MINUTES` | `10080` | Vigencia del refresh token en minutos (7 días) |
@@ -241,6 +267,13 @@ app:
     max-hr: 185
   elevation:
     min-threshold-meters: 0.1
+    external-on-import: false
+    api-key: ${APP_ELEVATION_API_KEY:}
+    backfill:
+      enabled: true
+      cron: 0 */15 * * * *
+      max-calls-per-run: 80
+      sample-distance-meters: 90
   cors:
     allowed-origins: http://localhost:3000,http://localhost:5173
   openapi:
@@ -445,10 +478,107 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | Método | Path | Descripción |
 |--------|------|-------------|
 | `GET` | `/` | Listar actividades (paginado) |
+| `GET` | `/elevation-coverage` | Porcentaje de trackpoints con altitud y pendientes |
 | `GET` | `/{id}` | Obtener actividad por ID |
 | `GET` | `/{id}/trackpoints` | Obtener trackpoints (con `?resolution=`) |
+| `POST` | `/{id}/complete-trackpoints` | Completar huecos de telemetría y altitudes 0/nulas |
 | `DELETE` | `/{id}` | Eliminar actividad por ID |
 | `DELETE` | `/` | Vaciar toda la base de datos |
+
+#### Completado de trackpoints
+
+`POST /api/v1/activities/{id}/complete-trackpoints` rellena los huecos de la telemetría de una
+actividad ya almacenada:
+
+- **Latitud/longitud**: interpolación lineal entre los puntos GPS válidos vecinos.
+- **Altitud, FC, cadencia y velocidad**: interpolación lineal; los extremos usan el valor del
+  vecino más cercano.
+- **Velocidad sin datos**: se deriva de la distancia acumulada y el tiempo.
+- **Altitud toda a 0 o nula**: se consultan las coordenadas en Open-Meteo (Copernicus DEM,
+  ~90 m) y se interpolan las altitudes restantes. Se puede desactivar con
+  `APP_ELEVATION_EXTERNAL_ENABLED=false`.
+
+La importación individual y masiva completa latitud/longitud, FC, cadencia, velocidad y las
+altitudes que se puedan interpolar entre puntos existentes. **Por defecto no llama a
+Open-Meteo durante la importación** (`APP_ELEVATION_EXTERNAL_ON_IMPORT=false`): la altitud que
+falta la completa un cron en segundo plano. Así una importación nunca queda bloqueada por la
+cuota del proveedor.
+
+El cron (`ElevationBackfillService`) se ejecuta cada 15 minutos y:
+
+- Busca actividades con algún trackpoint sin altitud útil y coordenadas GPS válidas.
+- Procesa primero las actividades más antiguas.
+- Envía **solo trackpoints sin altitud**, separados al menos 90 m entre sí.
+- Interpola el resto entre las coordenadas consultadas y recalcula D+/D- y las estadísticas
+  globales del usuario.
+- No extrapola el final de la actividad: si queda tramo pendiente, el siguiente lote continúa
+  desde ahí.
+
+Con el presupuesto por defecto (80 coordenadas cada 15 minutos) el uso queda así:
+
+| Ventana | Límite Open-Meteo | Uso con 80/15 min | Margen |
+|---------|------------------:|------------------:|-------:|
+| Minuto | 600 | 80 por ejecución | 520 |
+| Hora | 5.000 | 320 (4 × 80) | 4.680 |
+| Día | 10.000 | 7.680 (96 × 80) | 2.320 |
+| Mes | 300.000 | ~230.400 | ~69.600 |
+
+Ese margen deja cuota para el endpoint manual, reintentos y picos puntuales. Si necesitas
+acelerar el backfill, sube `APP_ELEVATION_BACKFILL_MAX_CALLS_PER_RUN`, pero mantén el uso diario
+por debajo de 10.000: por ejemplo, 100 cada 15 minutos son 9.600/día y ya dejan muy poco margen.
+Si defines la expresión cron por entorno, entrecomíllala: `APP_ELEVATION_BACKFILL_CRON="0 */15 * * * *"`.
+
+El cron está pensado para **una sola instancia**. Si despliegas varias réplicas, activa el
+backfill solo en una o usa un lock distribuido (por ejemplo, ShedLock).
+
+Open-Meteo cuenta una llamada por coordenada. Si el proveedor responde 429, el cliente respeta
+`Retry-After` y reintenta con backoff; el cron consumirá como máximo su presupuesto por
+ejecución y el resto queda para la siguiente.
+
+#### Cobertura de altitudes
+
+`GET /api/v1/activities/elevation-coverage` devuelve el progreso global del usuario autenticado:
+
+```bash
+curl http://localhost:8080/api/v1/activities/elevation-coverage \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "totalTrackpoints": 202901,
+  "trackpointsWithElevation": 190480,
+  "trackpointsMissingElevation": 12421,
+  "withElevationPercent": 93.88,
+  "missingElevationPercent": 6.12
+}
+```
+
+Una altitud nula o 0 se considera pendiente, igual que en el cron, salvo que haya sido
+calculada por el completado (por ejemplo, un 0 real devuelto por el modelo digital). Es útil
+para comprobar cómo avanza el backfill sin tener que consultar la base de datos.
+
+#### API key de Open-Meteo
+
+El plan gratuito no necesita clave. Si contratas un plan de pago, define:
+
+```bash
+APP_ELEVATION_API_KEY=tu_clave
+```
+
+La aplicación cambia automáticamente de `api.open-meteo.com` a
+`customer-api.open-meteo.com` cuando la URL sigue siendo la gratuita por defecto, y envía la
+clave como parámetro `apikey`. La clave nunca se escribe en los logs. Con un plan de pago puedes
+subir `APP_ELEVATION_MAX_CALLS_PER_MINUTE` y `APP_ELEVATION_BACKFILL_MAX_CALLS_PER_RUN` según tu
+contrato; el resto de límites (horario, diario y mensual) sigue aplicando.
+
+El endpoint manual sigue disponible para forzar el completado de una actividad concreta, pero
+consume cuota de Open-Meteo en ese momento. Para el día a día, deja que actúe el cron.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/complete-trackpoints \
+  -H "Authorization: Bearer <token>"
+```
 
 ### Estadísticas (`/api/v1/stats`)
 
