@@ -14,7 +14,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U runninging -d running_api"]
+      test: [ "CMD-SHELL", "pg_isready -U runninging -d running_api" ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -31,7 +31,7 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/running_api
       - SPRING_DATASOURCE_USERNAME=runninging
       - SPRING_DATASOURCE_PASSWORD=runninging
-      - APP_CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,https://running-api.pdrgmz.uk,http://running-api.pdrgmz.uk}
+      - APP_CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173,https://running-api.pdrgmz.uk,http://running-api.pdrgmz.uk,https://running.pdrgmz.uk}
       - APP_ELEVATION_API_KEY=${APP_ELEVATION_API_KEY:-}
       - APP_ELEVATION_EXTERNAL_ON_IMPORT=${APP_ELEVATION_EXTERNAL_ON_IMPORT:-false}
       - APP_ELEVATION_MAX_CALLS_PER_MINUTE=${APP_ELEVATION_MAX_CALLS_PER_MINUTE:-500}
