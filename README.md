@@ -484,6 +484,7 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | `GET` | `/{id}/trackpoints` | Obtener trackpoints (con `?resolution=`) |
 | `POST` | `/{id}/complete-trackpoints` | Completar huecos de telemetría y altitudes 0/nulas |
 | `POST` | `/{id}/complete-metrics` | Completar FC, cadencia y velocidad, y ajustar la distancia |
+| `POST` | `/complete-metrics` | Aplicar el completado de métricas a todas las actividades |
 | `DELETE` | `/{id}` | Eliminar actividad por ID |
 | `DELETE` | `/` | Vaciar toda la base de datos |
 
@@ -623,6 +624,48 @@ curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/comple
   "distanceAdjusted": 3,
   "distanceDiscardedMeters": 4900.0,
   "message": "Frecuencia cardíaca, cadencia y velocidad completadas con datos de los puntos vecinos; se descartaron 6 valores fuera de rango; se ajustaron 3 distancias (4900.0 m descartados)"
+}
+```
+
+#### Completado masivo de métricas
+
+`POST /api/v1/activities/complete-metrics` recorre todas las actividades del usuario autenticado
+y aplica el mismo proceso a todos sus trackpoints:
+
+- Completa FC, cadencia y velocidad y descarta los valores fuera de rango.
+- Ajusta la distancia acumulada de los trackpoints.
+- **No modifica** la altitud ni las coordenadas y **no consulta** proveedores externos.
+- Procesa cada actividad en su propia transacción: si una falla, las demás continúan.
+- Recalcula las estadísticas globales y los récords personales una sola vez al final.
+- Devuelve los totales agregados y un mapa `errors` con los IDs de las actividades fallidas.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/activities/complete-metrics \
+  -H "Authorization: Bearer <token>"
+```
+
+```json
+{
+  "activitiesFound": 42,
+  "activitiesProcessed": 41,
+  "activitiesUpdated": 30,
+  "activitiesWithoutTrackpoints": 2,
+  "activitiesFailed": 1,
+  "totalTrackpoints": 150000,
+  "heartRateFilled": 1500,
+  "cadenceFilled": 800,
+  "speedFilled": 400,
+  "heartRateRemoved": 20,
+  "cadenceRemoved": 10,
+  "speedRemoved": 30,
+  "totalFilled": 2700,
+  "totalRemoved": 60,
+  "distanceAdjusted": 350,
+  "distanceDiscardedMeters": 12500.0,
+  "errors": {
+    "2026-09-05T07:00:00Z": "datos corruptos"
+  },
+  "message": "Actividades procesadas: 41 de 42 (actualizadas: 30, sin cambios: 9, sin trackpoints: 2, fallidas: 1). Se completaron 2700 valores, se descartaron 60 valores fuera de rango, se ajustaron 350 distancias"
 }
 ```
 

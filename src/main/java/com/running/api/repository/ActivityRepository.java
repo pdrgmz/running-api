@@ -24,6 +24,9 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
 
     List<Activity> findByUserId(Long userId);
 
+    @Query("SELECT a.id FROM Activity a WHERE a.userId = :userId ORDER BY a.startTime ASC")
+    List<String> findIdsByUserId(@Param("userId") Long userId);
+
     List<Activity> findByUserIdOrderByStartTimeDesc(Long userId);
 
     List<Activity> findByUserIdAndDistanceMetersGreaterThanEqual(Long userId, Double distanceMeters);

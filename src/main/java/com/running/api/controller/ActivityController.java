@@ -3,6 +3,7 @@ package com.running.api.controller;
 import com.running.api.dto.ElevationCoverageDto;
 import com.running.api.dto.ErrorResponseDto;
 import com.running.api.dto.TrackpointCompletionResultDto;
+import com.running.api.dto.TrackpointMetricsBatchCompletionResultDto;
 import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
@@ -128,6 +129,24 @@ public class ActivityController {
         return activityService.completeActivityTrackpoints(principal.id(), id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping("/complete-metrics")
+    @Operation(summary = "Completar FC, cadencia, velocidad y distancia en todas las carreras",
+               description = "Recorre todas las actividades del usuario autenticado y aplica el mismo "
+                       + "completado que el endpoint individual: descarta valores fuera de rango "
+                       + "fisiológico, interpola FC, cadencia y velocidad, y ajusta la distancia "
+                       + "acumulada. No modifica coordenadas ni altitud y no consulta proveedores "
+                       + "externos. Cada actividad se procesa en su propia transacción; si una falla, "
+                       + "las demás continúan. Al final se recalculan estadísticas y récords.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Proceso masivo completado"),
+            @ApiResponse(responseCode = "401", description = "No autenticado o token inválido",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<TrackpointMetricsBatchCompletionResultDto> completeAllMetrics(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(activityService.completeAllActivityMetrics(principal.id()));
     }
 
     @PostMapping("/{id}/complete-metrics")
