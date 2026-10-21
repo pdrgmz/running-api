@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -72,14 +73,35 @@ class ActivityServiceTest {
 
         verify(activityRepository).deleteAll(List.of(first, second));
         verify(personalRecordRepository).deleteByUserId(7L);
-        verify(summaryStatsRepository).deleteByUserId(7L);
+        verify(summaryStatsRepository, never()).deleteByUserId(anyLong());
 
         ArgumentCaptor<GlobalSummaryStats> stats = ArgumentCaptor.forClass(GlobalSummaryStats.class);
         verify(summaryStatsRepository).save(stats.capture());
+        assertThat(stats.getValue().getId()).isNull();
         assertThat(stats.getValue().getUserId()).isEqualTo(7L);
         assertThat(stats.getValue().getTotalActivities()).isZero();
         assertThat(stats.getValue().getTotalDistanceMeters()).isZero();
         assertThat(stats.getValue().getTotalElevationGain()).isZero();
+    }
+
+    @Test
+    void resettingStatsReusesTheExistingSummaryRow() {
+        // Insertar una fila nueva mientras la antigua sigue viva provoca un choque con la
+        // restricción única de user_id (Hibernate ejecuta los INSERT antes que los DELETE).
+        when(activityRepository.findByUserId(7L)).thenReturn(List.of());
+        when(summaryStatsRepository.findByUserId(7L)).thenReturn(Optional.of(
+                GlobalSummaryStats.builder().id(99L).userId(7L).build()));
+
+        activityService.deleteAllActivities(7L, "delete-1");
+
+        verify(summaryStatsRepository, never()).deleteByUserId(anyLong());
+
+        ArgumentCaptor<GlobalSummaryStats> stats = ArgumentCaptor.forClass(GlobalSummaryStats.class);
+        verify(summaryStatsRepository).save(stats.capture());
+        assertThat(stats.getValue().getId()).isEqualTo(99L);
+        assertThat(stats.getValue().getUserId()).isEqualTo(7L);
+        assertThat(stats.getValue().getTotalActivities()).isZero();
+        assertThat(stats.getValue().getTotalCalories()).isZero();
     }
 
     @Test

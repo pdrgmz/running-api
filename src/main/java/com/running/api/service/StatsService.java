@@ -381,12 +381,18 @@ public class StatsService {
 
     @Transactional
     public void recalculateStatsAndRecords(Long userId) {
-        summaryStatsRepository.deleteByUserId(userId);
         GlobalSummaryStats newStats = activityRepository.calculateAggregatedSummary(userId);
         if (newStats == null) {
             newStats = new GlobalSummaryStats(0L, 0.0, 0.0, 0.0, 0L, 0);
         }
         newStats.setUserId(userId);
+        // Reutiliza la fila existente: dentro de una misma transacción Hibernate ejecuta los
+        // INSERT antes que los DELETE diferidos, así que borrar y reinsertar choca con la
+        // restricción única de user_id.
+        Optional<GlobalSummaryStats> existingStats = summaryStatsRepository.findByUserId(userId);
+        if (existingStats.isPresent()) {
+            newStats.setId(existingStats.get().getId());
+        }
         summaryStatsRepository.save(newStats);
 
         // No es necesario deleteAll() — recalculateAllPersonalRecords() hace upsert por (usuario, categoría)

@@ -183,10 +183,11 @@ public class ActivityService {
             }
 
             personalRecordRepository.deleteByUserId(userId);
-            summaryStatsRepository.deleteByUserId(userId);
 
-            // Reinicia el resumen del usuario a cero.
-            summaryStatsRepository.save(GlobalSummaryStats.builder()
+            // Reinicia el resumen del usuario a cero reutilizando la fila existente: dentro
+            // de una misma transacción Hibernate ejecuta los INSERT antes que los DELETE
+            // diferidos, así que borrar y reinsertar choca con la restricción única de user_id.
+            GlobalSummaryStats summaryStats = GlobalSummaryStats.builder()
                     .userId(userId)
                     .totalActivities(0L)
                     .totalDistanceMeters(0.0)
@@ -194,7 +195,9 @@ public class ActivityService {
                     .totalElevationGain(0.0)
                     .totalCalories(0L)
                     .maxHeartRateGlobal(0)
-                    .build());
+                    .build();
+            summaryStatsRepository.findByUserId(userId).ifPresent(existing -> summaryStats.setId(existing.getId()));
+            summaryStatsRepository.save(summaryStats);
 
             deletionStatusTracker.markCompleted(deleteId, total);
         } catch (RuntimeException ex) {

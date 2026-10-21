@@ -1,15 +1,29 @@
 package com.running.api.service;
 
 import com.running.api.model.ActivityTrackpoint;
+import com.running.api.model.GlobalSummaryStats;
+import com.running.api.repository.ActivityRepository;
+import com.running.api.repository.ActivityTrackpointRepository;
+import com.running.api.repository.GlobalSummaryStatsRepository;
+import com.running.api.repository.PersonalRecordRepository;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class StatsServiceTest {
 
@@ -135,6 +149,35 @@ class StatsServiceTest {
         assertThat(service.findFastestSegment(List.of(), 1000.0)).isNull();
         assertThat(service.findFastestSegment(List.of(point(0, 0.0)), 1000.0)).isNull();
         assertThat(service.findFastestSegment(List.of(point(0, null), point(1, null)), 1000.0)).isNull();
+    }
+
+    @Test
+    void recalculateStatsAndRecordsReusesTheExistingSummaryRow() {
+        // Reinsertar el resumen con otra fila choca con la restricción única de user_id:
+        // Hibernate ejecuta los INSERT antes que los DELETE diferidos de la transacción.
+        ActivityRepository activityRepository = mock(ActivityRepository.class);
+        ActivityTrackpointRepository trackpointRepository = mock(ActivityTrackpointRepository.class);
+        GlobalSummaryStatsRepository summaryStatsRepository = mock(GlobalSummaryStatsRepository.class);
+        PersonalRecordRepository personalRecordRepository = mock(PersonalRecordRepository.class);
+        StatsService mockService = new StatsService(
+                activityRepository, trackpointRepository, summaryStatsRepository, personalRecordRepository);
+
+        when(activityRepository.calculateAggregatedSummary(5L)).thenReturn(
+                GlobalSummaryStats.builder().totalActivities(3L).totalDistanceMeters(12000.0).build());
+        when(summaryStatsRepository.findByUserId(5L)).thenReturn(Optional.of(
+                GlobalSummaryStats.builder().id(42L).userId(5L).build()));
+        when(activityRepository.findByUserIdAndDistanceMetersGreaterThanEqual(eq(5L), anyDouble()))
+                .thenReturn(List.of());
+
+        mockService.recalculateStatsAndRecords(5L);
+
+        verify(summaryStatsRepository, never()).deleteByUserId(anyLong());
+        ArgumentCaptor<GlobalSummaryStats> stats = ArgumentCaptor.forClass(GlobalSummaryStats.class);
+        verify(summaryStatsRepository).save(stats.capture());
+        assertThat(stats.getValue().getId()).isEqualTo(42L);
+        assertThat(stats.getValue().getUserId()).isEqualTo(5L);
+        assertThat(stats.getValue().getTotalActivities()).isEqualTo(3L);
+        assertThat(stats.getValue().getTotalDistanceMeters()).isEqualTo(12000.0);
     }
 
     /**
