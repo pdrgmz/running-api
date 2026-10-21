@@ -484,7 +484,8 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | `POST` | `/{id}/complete-trackpoints` | Completar huecos de telemetría y altitudes 0/nulas |
 | `POST` | `/{id}/complete-metrics` | Completar FC, cadencia y velocidad, y ajustar la distancia |
 | `DELETE` | `/{id}` | Eliminar actividad por ID |
-| `DELETE` | `/` | Vaciar toda la base de datos |
+| `DELETE` | `/` | Vaciar toda la base (asíncrono; devuelve `202` con un `deleteId`) |
+| `GET` | `/delete-status/{deleteId}` | Consultar el progreso del vaciado |
 
 ### Actividades globales (`/api/v1/global-activities`)
 
@@ -492,6 +493,27 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 |--------|------|-------------|
 | `GET` | `/elevation-coverage` | Porcentaje de trackpoints con altitud y pendientes |
 | `POST` | `/complete-metrics` | Aplicar el completado de métricas a todas las actividades |
+
+#### Vaciado asíncrono
+
+`DELETE /api/v1/activities` no bloquea: encola el borrado y responde `202 Accepted` con un
+objeto de estado.
+
+```json
+{
+  "deleteId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "PENDING",
+  "totalActivities": 0,
+  "deletedActivities": 0,
+  "progressPercent": 0.0,
+  "message": "Vaciado en cola"
+}
+```
+
+El progreso se consulta con `GET /api/v1/activities/delete-status/{deleteId}` (`PENDING`,
+`PROCESSING`, `COMPLETED`, `FAILED`). El borrado es todo o nada: si algo falla, la transacción
+hace rollback y el estado queda en `FAILED` con el error. Solo se conserva el último vaciado de
+cada usuario.
 
 #### Completado de trackpoints
 

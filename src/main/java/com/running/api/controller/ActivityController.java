@@ -18,12 +18,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.running.api.dto.ActivityDeletionStatusDto;
 import com.running.api.dto.ErrorResponseDto;
 import com.running.api.dto.TrackpointCompletionResultDto;
 import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.security.UserPrincipal;
+import com.running.api.service.ActivityDeletionStatusTracker;
 import com.running.api.service.ActivityService;
 
 import io.swagger.v3.oas.annotations.Operation;
@@ -42,6 +44,7 @@ import lombok.RequiredArgsConstructor;
 public class ActivityController {
 
         private final ActivityService activityService;
+        private final ActivityDeletionStatusTracker deletionStatusTracker;
 
         @GetMapping
         @Operation(summary = "Listar las carreras del usuario autenticado", description = "Devuelve una página de actividades ordenada por fecha de inicio descendente. Soporta paginación y ordenación mediante los parámetros page, size y sort.")
@@ -126,17 +129,34 @@ public class ActivityController {
         }
 
         @DeleteMapping
-        @Operation(summary = "Vaciar las actividades del usuario autenticado", description = "Elimina todas las carreras, trackpoints y récords personales del usuario y reinicia sus estadísticas.")
+        @Operation(summary = "Vaciar las actividades del usuario autenticado (asíncrono)", description = "Elimina en segundo plano todas las carreras, trackpoints, ficheros de respaldo y récords personales "
+                        + "del usuario, y reinicia sus estadísticas. Responde 202 Accepted con un identificador de "
+                        + "vaciado cuyo progreso se consulta en GET /api/v1/activities/delete-status/{deleteId}.")
         @ApiResponses({
-                        @ApiResponse(responseCode = "200", description = "Actividades y estadísticas vaciadas"),
+                        @ApiResponse(responseCode = "202", description = "Vaciado aceptado y en proceso"),
                         @ApiResponse(responseCode = "401", description = "No autenticado o token inválido", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
         })
-        public ResponseEntity<Map<String, Object>> deleteAllActivities(
+        public ResponseEntity<ActivityDeletionStatusDto> deleteAllActivities(
                         @AuthenticationPrincipal UserPrincipal principal) {
-                int count = activityService.deleteAllActivities(principal.id());
-                return ResponseEntity.ok(Map.of(
-                                "message", "Actividades y estadísticas del usuario vaciadas con éxito",
-                                "deletedActivities", count));
+                ActivityDeletionStatusDto status = deletionStatusTracker.create(principal.id());
+                activityService.deleteAllActivities(principal.id(), status.getDeleteId());
+                return ResponseEntity.accepted().body(status);
+        }
+
+        @GetMapping("/delete-status/{deleteId}")
+        @Operation(summary = "Consultar el estado de un vaciado de actividades", description = "Estados: PENDING (en cola), PROCESSING (eliminando), COMPLETED (terminado) y FAILED (error). "
+                        + "Solo se conserva el último vaciado de cada usuario.")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "200", description = "Estado del vaciado"),
+                        @ApiResponse(responseCode = "404", description = "El vaciado no existe o fue reemplazado por uno más reciente", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+        })
+        public ResponseEntity<ActivityDeletionStatusDto> getDeletionStatus(
+                        @Parameter(description = "ID del vaciado devuelto por DELETE /api/v1/activities", example = "a1b2c3d4-e5f6-7890-abcd-ef1234567890") @PathVariable String deleteId) {
+                ActivityDeletionStatusDto status = deletionStatusTracker.getStatus(deleteId);
+                if (status == null) {
+                        return ResponseEntity.notFound().build();
+                }
+                return ResponseEntity.ok(status);
         }
 
         @DeleteMapping("/{id}")

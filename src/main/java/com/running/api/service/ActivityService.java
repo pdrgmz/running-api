@@ -30,6 +30,9 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class ActivityService {
 
+    /** Tamaño de lote del vaciado, para poder informar del progreso mientras borra. */
+    private static final int DELETE_BATCH_SIZE = 10;
+
     private final ActivityRepository activityRepository;
     private final ActivityTrackpointRepository trackpointRepository;
     private final GlobalSummaryStatsRepository summaryStatsRepository;
@@ -37,6 +40,7 @@ public class ActivityService {
     private final FileService fileService;
     private final StatsService statsService;
     private final TrackpointCompletionService trackpointCompletionService;
+    private final ActivityDeletionStatusTracker deletionStatusTracker;
 
     @Transactional(readOnly = true)
     public Page<Activity> getAllActivities(Long userId, Pageable pageable) {
@@ -148,35 +152,57 @@ public class ActivityService {
         return sampled;
     }
 
+    /**
+     * Vacía las actividades y estadísticas del usuario en segundo plano. El progreso se
+     * consulta con el {@code deleteId} en {@link ActivityDeletionStatusTracker}.
+     * <p>
+     * El borrado es todo o nada: si algo falla, la transacción hace rollback y el estado
+     * queda como {@code FAILED}.
+     */
+    @Async("taskExecutor")
     @Transactional
-    @Async
-    public int deleteAllActivities(Long userId) {
-        List<Activity> activities = activityRepository.findByUserId(userId);
-        int count = activities.size();
+    public void deleteAllActivities(Long userId, String deleteId) {
+        try {
+            List<Activity> activities = activityRepository.findByUserId(userId);
+            int total = activities.size();
+            deletionStatusTracker.markProcessing(deleteId, total);
 
-        // Elimina los ficheros de respaldo del usuario (no toda la carpeta compartida).
-        for (Activity activity : activities) {
-            deleteBackupFile(activity);
+            // Elimina los ficheros de respaldo del usuario (no toda la carpeta compartida).
+            for (Activity activity : activities) {
+                deleteBackupFile(activity);
+            }
+
+            // El borrado de actividades propaga a sus trackpoints (cascade + orphanRemoval).
+            // Se hace por lotes para poder informar del progreso.
+            int deleted = 0;
+            for (int i = 0; i < total; i += DELETE_BATCH_SIZE) {
+                List<Activity> batch = activities.subList(i, Math.min(i + DELETE_BATCH_SIZE, total));
+                activityRepository.deleteAll(batch);
+                deleted += batch.size();
+                deletionStatusTracker.updateProgress(deleteId, deleted);
+            }
+
+            personalRecordRepository.deleteByUserId(userId);
+            summaryStatsRepository.deleteByUserId(userId);
+
+            // Reinicia el resumen del usuario a cero.
+            summaryStatsRepository.save(GlobalSummaryStats.builder()
+                    .userId(userId)
+                    .totalActivities(0L)
+                    .totalDistanceMeters(0.0)
+                    .totalTimeSeconds(0.0)
+                    .totalElevationGain(0.0)
+                    .totalCalories(0L)
+                    .maxHeartRateGlobal(0)
+                    .build());
+
+            deletionStatusTracker.markCompleted(deleteId, total);
+        } catch (RuntimeException ex) {
+            log.error("Vaciado de actividades del usuario {} fallido: {}", userId, ex.getMessage());
+            deletionStatusTracker.markFailed(deleteId, ex.getMessage());
+            // Se relanza para que la transacción haga rollback: el vaciado es todo o nada.
+            throw ex;
         }
-
-        // El borrado de actividades propaga a sus trackpoints (cascade +
-        // orphanRemoval).
-        activityRepository.deleteAll(activities);
-        personalRecordRepository.deleteByUserId(userId);
-        summaryStatsRepository.deleteByUserId(userId);
-
-        // Reinicia el resumen del usuario a cero.
-        summaryStatsRepository.save(GlobalSummaryStats.builder()
-                .userId(userId)
-                .totalActivities(0L)
-                .totalDistanceMeters(0.0)
-                .totalTimeSeconds(0.0)
-                .totalElevationGain(0.0)
-                .totalCalories(0L)
-                .maxHeartRateGlobal(0)
-                .build());
-
-        return count;
     }
 
     @Transactional
