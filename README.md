@@ -129,8 +129,6 @@ src/main/java/com/running/api/
 │   ├── SplitDto.java
 │   ├── StreakStatsDto.java
 │   ├── SummaryStatsDto.java
-│   ├── TrackpointCompletionResultDto.java # Resumen del completado de telemetría
-│   ├── TrackpointMetricsCompletionResultDto.java # Resumen del completado de FC/cadencia/velocidad
 │   ├── TrainingLoadResponseDto.java
 │   ├── UserResponseDto.java     # Datos públicos del usuario
 │   ├── Vo2MaxVamResponseDto.java
@@ -184,11 +182,11 @@ src/main/java/com/running/api/
 │   ├── GpxParserService.java
 │   ├── StatsService.java
 │   ├── TcxParserService.java
-│   ├── TrackpointCompletionService.java # Rellena huecos de telemetría
 │   ├── ElevationProvider.java           # Puerto de proveedores de elevación
 │   └── OpenMeteoElevationProvider.java  # DEM real vía Open-Meteo
 ├── util/
-│   ├── ElevationAccumulator.java # Desnivel D+/D- con histéresis (filtro de ruido)
+│   ├── AltitudeUtils.java        # Altitud válida/ausente (distingue el 0 real del pendiente)
+│   ├── ElevationAccumulator.java # Desnivel D+/D- con histéresis (filtro de ruido GPS)
 │   ├── GeoUtils.java             # Distancia Haversine
 │   ├── RunningMetrics.java       # TRIMP / VAM / VO2Max / detección de deporte
 │   └── SeriesInterpolation.java  # Relleno lineal de series con huecos
@@ -213,10 +211,8 @@ src/main/java/com/running/api/
 | `APP_ELEVATION_EXTERNAL_ENABLED` | `true` | Consultar un DEM externo cuando toda la altitud sea 0/nula |
 | `APP_ELEVATION_API_URL` | `https://api.open-meteo.com/v1/elevation` | Endpoint del proveedor de elevaciones |
 | `APP_ELEVATION_API_KEY` | *(vacío)* | API key opcional; si se define, usa el endpoint de cliente |
-| `APP_ELEVATION_EXTERNAL_ON_IMPORT` | `false` | Consultar el DEM durante la importación; el cron lo hace por defecto |
 | `APP_ELEVATION_BATCH_SIZE` | `50` | Coordenadas por petición al proveedor |
 | `APP_ELEVATION_TIMEOUT_SECONDS` | `10` | Timeout de las peticiones de elevación |
-| `APP_ELEVATION_SAMPLE_EVERY` | `30` | Se consulta 1 de cada N puntos y se interpola el resto |
 | `APP_ELEVATION_MIN_INTERVAL_MILLIS` | `100` | Espera mínima entre peticiones al proveedor |
 | `APP_ELEVATION_MAX_CALLS_PER_MINUTE` | `500` | Presupuesto de coordenadas por minuto (límite gratuito: 600) |
 | `APP_ELEVATION_MAX_RETRIES` | `2` | Reintentos ante 429 o errores 5xx |
@@ -268,7 +264,6 @@ app:
     max-hr: 185
   elevation:
     min-threshold-meters: 0.1
-    external-on-import: false
     api-key: ${APP_ELEVATION_API_KEY:}
     backfill:
       enabled: true
@@ -481,18 +476,15 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | `GET` | `/` | Listar actividades (paginado) |
 | `GET` | `/{id}` | Obtener actividad por ID |
 | `GET` | `/{id}/trackpoints` | Obtener trackpoints (con `?resolution=`) |
-| `POST` | `/{id}/complete-trackpoints` | Completar huecos de telemetría y altitudes 0/nulas |
-| `POST` | `/{id}/complete-metrics` | Completar FC, cadencia y velocidad, y ajustar la distancia |
 | `DELETE` | `/{id}` | Eliminar actividad por ID |
 | `DELETE` | `/` | Vaciar toda la base (asíncrono; devuelve `202` con un `deleteId`) |
 | `GET` | `/delete-status/{deleteId}` | Consultar el progreso del vaciado |
 
-### Actividades globales (`/api/v1/global-activities`)
+### Actividades globales (`/api/v1/activities`)
 
 | Método | Path | Descripción |
 |--------|------|-------------|
 | `GET` | `/elevation-coverage` | Porcentaje de trackpoints con altitud y pendientes |
-| `POST` | `/complete-metrics` | Aplicar el completado de métricas a todas las actividades |
 
 #### Vaciado asíncrono
 
@@ -515,36 +507,15 @@ El progreso se consulta con `GET /api/v1/activities/delete-status/{deleteId}` (`
 hace rollback y el estado queda en `FAILED` con el error. Solo se conserva el último vaciado de
 cada usuario.
 
-#### Completado de trackpoints
+#### Backfill de altitudes
 
-`POST /api/v1/activities/{id}/complete-trackpoints` rellena los huecos de la telemetría de una
-actividad ya almacenada:
-
-- **Latitud/longitud**: interpolación lineal entre los puntos GPS válidos vecinos.
-- **Altitud, FC, cadencia y velocidad**: interpolación lineal; los extremos usan el valor del
-  vecino más cercano.
-- **Valores fuera de rango**: se descartan antes de interpolar (FC 30–240 bpm, cadencia
-  30–240 spm y velocidad mayor que 0 y menor o igual a 15 m/s). Si no hay vecinos válidos,
-  el valor queda vacío.
-- **Velocidad sin datos**: se deriva de la distancia acumulada y el tiempo.
-- **Distancia acumulada**: se descartan los retrocesos y saltos entre puntos que implicarían
-  una velocidad superior a 15 m/s, recalculando la serie de forma monótona.
-- **Altitud toda a 0 o nula**: se consultan las coordenadas en Open-Meteo (Copernicus DEM,
-  ~90 m) y se interpolan las altitudes restantes. Se puede desactivar con
-  `APP_ELEVATION_EXTERNAL_ENABLED=false`.
-
-La importación individual y masiva completa latitud/longitud, FC, cadencia, velocidad y las
-altitudes que se puedan interpolar entre puntos existentes. **Por defecto no llama a
-Open-Meteo durante la importación** (`APP_ELEVATION_EXTERNAL_ON_IMPORT=false`): la altitud que
-falta la completa un cron en segundo plano. Así una importación nunca queda bloqueada por la
-cuota del proveedor.
-
-El cron (`ElevationBackfillService`) se ejecuta cada 15 minutos y:
+Las importaciones guardan la telemetría tal como viene en el archivo. Un cron
+(`ElevationBackfillService`) se ejecuta cada 15 minutos y:
 
 - Busca actividades con algún trackpoint sin altitud útil y coordenadas GPS válidas.
 - También detecta actividades con **altitud constante sospechosa**: el mismo valor exacto en al
   menos el 90% de los trackpoints registrados por el dispositivo (con un mínimo de 10 puntos).
-  Esas altitudes se tratan como ausentes para recalcularlas; las ya calculadas por el completado
+  Esas altitudes se tratan como ausentes para recalcularlas; las ya calculadas por el backfill
   no cuentan, así que una actividad deja de estar pendiente en cuanto se recalcula.
 - Procesa primero las actividades más antiguas, mezclando ambos motivos.
 - Envía **solo trackpoints sin altitud o con altitud plana sospechosa**, separados al menos 90 m entre sí.
@@ -562,7 +533,7 @@ Con el presupuesto por defecto (80 coordenadas cada 15 minutos) el uso queda as�
 | Día | 10.000 | 7.680 (96 × 80) | 2.320 |
 | Mes | 300.000 | ~230.400 | ~69.600 |
 
-Ese margen deja cuota para el endpoint manual, reintentos y picos puntuales. Si necesitas
+Ese margen deja cuota para reintentos y picos puntuales. Si necesitas
 acelerar el backfill, sube `APP_ELEVATION_BACKFILL_MAX_CALLS_PER_RUN`, pero mantén el uso diario
 por debajo de 10.000: por ejemplo, 100 cada 15 minutos son 9.600/día y ya dejan muy poco margen.
 Si defines la expresión cron por entorno, entrecomíllala: `APP_ELEVATION_BACKFILL_CRON="0 */15 * * * *"`.
@@ -576,10 +547,10 @@ ejecución y el resto queda para la siguiente.
 
 #### Cobertura de altitudes
 
-`GET /api/v1/global-activities/elevation-coverage` devuelve el progreso global del usuario autenticado:
+`GET /api/v1/activities/elevation-coverage` devuelve el progreso global del usuario autenticado:
 
 ```bash
-curl http://localhost:8080/api/v1/global-activities/elevation-coverage \
+curl http://localhost:8080/api/v1/activities/elevation-coverage \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -596,7 +567,7 @@ curl http://localhost:8080/api/v1/global-activities/elevation-coverage \
 ```
 
 Una altitud nula o 0 se considera pendiente, igual que en el cron, salvo que haya sido
-calculada por el completado (por ejemplo, un 0 real devuelto por el modelo digital). También
+calculada por el backfill (por ejemplo, un 0 real devuelto por el modelo digital). También
 se consideran pendientes los trackpoints que comparten una **altitud constante sospechosa**
 (el mismo valor exacto en al menos el 90% de los trackpoints del dispositivo, con un mínimo
 de 10), que se informan aparte en `trackpointsWithFlatElevation`/`flatElevationPercent`.
@@ -616,98 +587,6 @@ La aplicación cambia automáticamente de `api.open-meteo.com` a
 clave como parámetro `apikey`. La clave nunca se escribe en los logs. Con un plan de pago puedes
 subir `APP_ELEVATION_MAX_CALLS_PER_MINUTE` y `APP_ELEVATION_BACKFILL_MAX_CALLS_PER_RUN` según tu
 contrato; el resto de límites (horario, diario y mensual) sigue aplicando.
-
-El endpoint manual sigue disponible para forzar el completado de una actividad concreta, pero
-consume cuota de Open-Meteo en ese momento. Para el día a día, deja que actúe el cron.
-
-```bash
-curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/complete-trackpoints \
-  -H "Authorization: Bearer <token>"
-```
-
-#### Completado de métricas (FC, cadencia, velocidad y distancia)
-
-`POST /api/v1/activities/{id}/complete-metrics` rellena únicamente los huecos de frecuencia
-cardíaca, cadencia y velocidad, y ajusta la distancia acumulada de una actividad ya almacenada:
-
-- Solo se reemplazan los valores **nulos**, los **imposibles** (FC o cadencia <= 0,
-  velocidad < 0 o > 15 m/s) y los que se alejan claramente de la mediana de sus vecinos.
-  El resto de valores se conserva sin cambios.
-- La velocidad 0 se considera válida (el corredor está parado) y no se rellena.
-- Cada serie se interpola linealmente entre sus valores válidos vecinos.
-- Los huecos iniciales y finales usan el valor válido más cercano.
-- La velocidad sin datos se deriva de la distancia acumulada y el tiempo.
-- Si una serie se queda sin valores válidos, sus puntos quedan vacíos (no se inventan datos).
-- **Distancia acumulada**: descarta retrocesos y saltos entre puntos que implicarían más de
-  15 m/s, recalculando la serie de forma monótona.
-- Corrige los valores medios y máximos de la actividad si alguno estaba fuera de rango.
-- **No modifica** coordenadas ni altitud y **no consulta** proveedores externos.
-
-```bash
-curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/complete-metrics \
-  -H "Authorization: Bearer <token>"
-```
-
-```json
-{
-  "activityId": "2026-09-05T07:00:00Z",
-  "totalTrackpoints": 3600,
-  "heartRateFilled": 15,
-  "cadenceFilled": 8,
-  "speedFilled": 4,
-  "heartRateRemoved": 2,
-  "cadenceRemoved": 1,
-  "speedRemoved": 3,
-  "totalFilled": 27,
-  "totalRemoved": 6,
-  "distanceAdjusted": 3,
-  "distanceDiscardedMeters": 4900.0,
-  "message": "Frecuencia cardíaca, cadencia y velocidad completadas con datos de los puntos vecinos; se descartaron 6 valores atípicos; se ajustaron 3 distancias (4900.0 m descartados)"
-}
-```
-
-#### Completado masivo de métricas
-
-`POST /api/v1/global-activities/complete-metrics` recorre todas las actividades del usuario
-autenticado y aplica el mismo proceso a todos sus trackpoints:
-
-- Solo completa FC, cadencia y velocidad en valores nulos o claramente atípicos; conserva
-  el resto de lecturas.
-- Ajusta la distancia acumulada de los trackpoints.
-- **No modifica** la altitud ni las coordenadas y **no consulta** proveedores externos.
-- Procesa cada actividad en su propia transacción: si una falla, las demás continúan.
-- Recalcula las estadísticas globales y los récords personales una sola vez al final.
-- Devuelve los totales agregados y un mapa `errors` con los IDs de las actividades fallidas.
-
-```bash
-curl -X POST http://localhost:8080/api/v1/global-activities/complete-metrics \
-  -H "Authorization: Bearer <token>"
-```
-
-```json
-{
-  "activitiesFound": 42,
-  "activitiesProcessed": 41,
-  "activitiesUpdated": 30,
-  "activitiesWithoutTrackpoints": 2,
-  "activitiesFailed": 1,
-  "totalTrackpoints": 150000,
-  "heartRateFilled": 1500,
-  "cadenceFilled": 800,
-  "speedFilled": 400,
-  "heartRateRemoved": 20,
-  "cadenceRemoved": 10,
-  "speedRemoved": 30,
-  "totalFilled": 2700,
-  "totalRemoved": 60,
-  "distanceAdjusted": 350,
-  "distanceDiscardedMeters": 12500.0,
-  "errors": {
-    "2026-09-05T07:00:00Z": "datos corruptos"
-  },
-  "message": "Actividades procesadas: 41 de 42 (actualizadas: 30, sin cambios: 9, sin trackpoints: 2, fallidas: 1). Se completaron 2700 valores, se descartaron 60 valores atípicos, se ajustaron 350 distancias"
-}
-```
 
 ### Estadísticas (`/api/v1/stats`)
 

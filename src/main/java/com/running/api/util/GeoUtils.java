@@ -1,5 +1,7 @@
 package com.running.api.util;
 
+import com.running.api.model.ActivityTrackpoint;
+
 /**
  * Utilidades de cálculo geográfico compartidas por los parsers TCX/GPX/FIT.
  */
@@ -24,5 +26,24 @@ public final class GeoUtils {
 
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return EARTH_RADIUS_METERS * c;
+    }
+
+    /**
+     * @return {@code true} si el trackpoint tiene latitud y longitud válidas.
+     */
+    public static boolean hasValidCoordinate(ActivityTrackpoint point) {
+        return point != null
+                && isValidLatitude(point.getLatitude())
+                && isValidLongitude(point.getLongitude());
+    }
+
+    public static boolean isValidLatitude(Double latitude) {
+        return latitude != null && Double.isFinite(latitude)
+                && latitude >= -90.0 && latitude <= 90.0;
+    }
+
+    public static boolean isValidLongitude(Double longitude) {
+        return longitude != null && Double.isFinite(longitude)
+                && longitude >= -180.0 && longitude <= 180.0;
     }
 }

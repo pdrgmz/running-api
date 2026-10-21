@@ -3,11 +3,13 @@ package com.running.api.service;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
+import com.running.api.util.AltitudeUtils;
+import com.running.api.util.ElevationAccumulator;
 import com.running.api.util.FlatAltitudeDetector;
 import com.running.api.util.GeoUtils;
 import com.running.api.util.SeriesInterpolation;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,12 +28,19 @@ import java.util.Set;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ElevationBackfillWorker {
 
     private final ActivityRepository activityRepository;
     private final ElevationProvider elevationProvider;
-    private final TrackpointCompletionService trackpointCompletionService;
+    private final double elevationThreshold;
+
+    public ElevationBackfillWorker(ActivityRepository activityRepository,
+                                   ElevationProvider elevationProvider,
+                                   @Value("${app.elevation.min-threshold-meters:0.1}") double elevationThreshold) {
+        this.activityRepository = activityRepository;
+        this.elevationProvider = elevationProvider;
+        this.elevationThreshold = elevationThreshold;
+    }
 
     /**
      * @return número de coordenadas enviadas al proveedor (consumo de cuota)
@@ -114,7 +123,7 @@ public class ElevationBackfillWorker {
         }
 
         if (applied > 0) {
-            trackpointCompletionService.recalculateElevation(activity);
+            recalculateElevation(activity, points);
             if (activity.getUserId() != null) {
                 affectedUsers.add(activity.getUserId());
             }
@@ -136,7 +145,7 @@ public class ElevationBackfillWorker {
         for (int i = 0; i < points.size() && samples.size() < maxCalls; i++) {
             ActivityTrackpoint point = points.get(i);
             if (!needsAltitude(point, flatAltitudes[i])
-                    || !TrackpointCompletionService.hasValidCoordinate(point)) {
+                    || !GeoUtils.hasValidCoordinate(point)) {
                 continue;
             }
 
@@ -157,7 +166,22 @@ public class ElevationBackfillWorker {
      * sospechosa que hay que recalcular.
      */
     private static boolean needsAltitude(ActivityTrackpoint point, boolean flat) {
-        return flat || TrackpointCompletionService.isMissingAltitude(point);
+        return flat || AltitudeUtils.isMissingAltitude(point);
+    }
+
+    /**
+     * Recalcula el desnivel acumulado a partir de las altitudes actuales de la actividad.
+     */
+    private void recalculateElevation(Activity activity, List<ActivityTrackpoint> points) {
+        ElevationAccumulator accumulator = new ElevationAccumulator(elevationThreshold);
+        for (ActivityTrackpoint point : points) {
+            Double altitude = point.getAltitudeMeters();
+            if (altitude != null && Double.isFinite(altitude)) {
+                accumulator.add(altitude);
+            }
+        }
+        activity.setElevationGain(round(accumulator.getGain(), 1));
+        activity.setElevationLoss(round(accumulator.getLoss(), 1));
     }
 
     private static double round(double value, int decimals) {

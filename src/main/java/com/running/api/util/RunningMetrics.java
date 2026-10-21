@@ -30,25 +30,6 @@ public final class RunningMetrics {
     public static final int MIN_PLAUSIBLE_CADENCE_SPM = 30;
     public static final int MAX_PLAUSIBLE_CADENCE_SPM = 240;
 
-    /**
-     * Límites absolutos de seguridad. Por encima de estos valores la lectura es imposible
-     * para una carrera a pie y se trata como ausente, aunque sus vecinos también sean altos.
-     * No sustituyen a la detección de valores atípicos respecto a los vecinos: solo evitan
-     * conservar lecturas corruptas evidentes.
-     */
-    public static final int ABSOLUTE_MAX_HEART_RATE_BPM = 250;
-    public static final int ABSOLUTE_MAX_CADENCE_SPM = 250;
-    public static final double ABSOLUTE_MAX_SPEED_MPS = 15.0;
-
-    /**
-     * Desviación mínima respecto a la mediana de los vecinos para considerar que un valor
-     * de FC, cadencia o velocidad está "muy por fuera" y debe interpolarse. Son umbrales
-     * conservadores: los cambios normales de una carrera no los superan.
-     */
-    public static final double NEIGHBOR_OUTLIER_HEART_RATE_DELTA_BPM = 50.0;
-    public static final double NEIGHBOR_OUTLIER_CADENCE_DELTA_SPM = 40.0;
-    public static final double NEIGHBOR_OUTLIER_SPEED_DELTA_MPS = 5.0;
-
     private static final double MIN_SPEED_FOR_VO2_MS = 1.0;
     private static final double MIN_VALID_VO2 = 20.0;
     private static final double MAX_VALID_VO2 = 100.0;

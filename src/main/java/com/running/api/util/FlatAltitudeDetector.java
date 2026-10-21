@@ -31,12 +31,6 @@ public final class FlatAltitudeDetector {
      */
     public static final int MIN_FLAT_ALTITUDE_POINTS = 10;
 
-    /**
-     * Mismo umbral que {@code TrackpointCompletionService.ALTITUDE_EPSILON}: una altitud
-     * cercana a 0 sin calcular se trata como ausente, no como altitud plana.
-     */
-    private static final double ALTITUDE_EPSILON = 1e-6;
-
     private FlatAltitudeDetector() {
     }
 
@@ -98,6 +92,7 @@ public final class FlatAltitudeDetector {
             return false;
         }
         Double altitude = point.getAltitudeMeters();
-        return altitude != null && Double.isFinite(altitude) && Math.abs(altitude) > ALTITUDE_EPSILON;
+        return altitude != null && Double.isFinite(altitude)
+                && Math.abs(altitude) > AltitudeUtils.ALTITUDE_EPSILON;
     }
 }

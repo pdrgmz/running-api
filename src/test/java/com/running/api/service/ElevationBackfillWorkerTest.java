@@ -149,6 +149,8 @@ class ElevationBackfillWorkerTest {
             assertThat(points[i].getAltitudeMeters()).isEqualTo(100.0 + i);
             assertThat(points[i].getElevationCalculated()).isTrue();
         }
+        assertThat(activity.getElevationGain()).isEqualTo(11.0);
+        assertThat(activity.getElevationLoss()).isZero();
     }
 
     @Test
@@ -216,9 +218,7 @@ class ElevationBackfillWorkerTest {
     private static ElevationBackfillWorker worker(Activity activity, ElevationProvider provider) {
         ActivityRepository repository = mock(ActivityRepository.class);
         when(repository.findById(activity.getId())).thenReturn(Optional.of(activity));
-        TrackpointCompletionService completionService =
-                new TrackpointCompletionService(provider, 1, 0.1, false);
-        return new ElevationBackfillWorker(repository, provider, completionService);
+        return new ElevationBackfillWorker(repository, provider, 0.1);
     }
 
     private static Activity activity(ActivityTrackpoint... points) {

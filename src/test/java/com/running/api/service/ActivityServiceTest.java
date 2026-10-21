@@ -50,9 +50,6 @@ class ActivityServiceTest {
     private StatsService statsService;
 
     @Mock
-    private TrackpointCompletionService trackpointCompletionService;
-
-    @Mock
     private ActivityDeletionStatusTracker deletionStatusTracker;
 
     @InjectMocks

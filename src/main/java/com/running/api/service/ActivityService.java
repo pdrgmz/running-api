@@ -12,8 +12,6 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.running.api.dto.TrackpointCompletionResultDto;
-import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.model.GlobalSummaryStats;
@@ -39,7 +37,6 @@ public class ActivityService {
     private final PersonalRecordRepository personalRecordRepository;
     private final FileService fileService;
     private final StatsService statsService;
-    private final TrackpointCompletionService trackpointCompletionService;
     private final ActivityDeletionStatusTracker deletionStatusTracker;
 
     @Transactional(readOnly = true)
@@ -66,58 +63,6 @@ public class ActivityService {
             return points;
         }
         return downsampleTrackpoints(points, resolution);
-    }
-
-    /**
-     * Completa los huecos de telemetría de una actividad ya almacenada y recalcula
-     * sus
-     * estadísticas agregadas. Los trackpoints se actualizan por dirty checking
-     * dentro de
-     * la transacción.
-     */
-    @Transactional
-
-    public Optional<TrackpointCompletionResultDto> completeActivityTrackpoints(
-            Long userId, String id) {
-        Optional<Activity> activityOpt = activityRepository.findByIdAndUserId(id, userId);
-        if (activityOpt.isEmpty()) {
-            return Optional.empty();
-        }
-
-        Activity activity = activityOpt.get();
-        TrackpointCompletionResultDto result = trackpointCompletionService.complete(activity);
-
-        // La actividad ya está gestionada por JPA; los cambios se persisten al hacer
-        // commit.
-        // El resumen global puede cambiar si se completó la altitud o la frecuencia
-        // cardíaca.
-        fileService.recalculateAllStats(userId);
-
-        return Optional.of(result);
-        //
-    }
-    //
-
-    /**
-     * Completa únicamente la frecuencia cardíaca, la cadencia y la velocidad de una
-     * actividad
-     * ya almacenada. No modifica las coordenadas ni la altitud, por lo que no
-     * consume cuota
-     * de proveedores externos.
-     */
-    @Transactional
-    public Optional<TrackpointMetricsCompletionResultDto> completeActivityMetrics(Long userId, String id) {
-        Optional<Activity> activityOpt = activityRepository.findByIdAndUserId(id, userId);
-        if (activityOpt.isEmpty()) {
-            return Optional.empty();
-        }
-        Activity activity = activityOpt.get();
-        TrackpointMetricsCompletionResultDto result = trackpointCompletionService.completeMetrics(activity);
-
-        // La FC máxima agregada del usuario puede cambiar; el resto de métricas no.
-        fileService.recalculateAllStats(userId);
-
-        return Optional.of(result);
     }
 
     private List<ActivityTrackpoint> downsampleTrackpoints(List<ActivityTrackpoint> points, String resolution) {

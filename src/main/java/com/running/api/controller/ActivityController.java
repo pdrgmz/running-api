@@ -13,15 +13,12 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.running.api.dto.ActivityDeletionStatusDto;
 import com.running.api.dto.ErrorResponseDto;
-import com.running.api.dto.TrackpointCompletionResultDto;
-import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.security.UserPrincipal;
@@ -89,43 +86,6 @@ public class ActivityController {
                         return ResponseEntity.notFound().build();
                 }
                 return ResponseEntity.ok(trackpoints);
-        }
-
-        @PostMapping("/{id}/complete-trackpoints")
-        @Operation(summary = "Completar los datos que falten en los trackpoints de una carrera", description = "Rellena latitud, longitud, altitud, frecuencia cardíaca, cadencia y velocidad "
-                        + "interpolando con los puntos vecinos, descartando antes los valores de FC, cadencia "
-                        + "y velocidad fuera de rango fisiológico. También ajusta la distancia acumulada "
-                        + "descartando retrocesos y saltos que implicarían más de 15 m/s. Si toda la altitud "
-                        + "es 0 o nula, consulta un modelo digital de elevaciones usando las coordenadas GPS.")
-        @ApiResponses({
-                        @ApiResponse(responseCode = "200", description = "Trackpoints completados"),
-                        @ApiResponse(responseCode = "404", description = "La actividad no existe o no pertenece al usuario", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
-        })
-        public ResponseEntity<TrackpointCompletionResultDto> completeTrackpoints(
-                        @AuthenticationPrincipal UserPrincipal principal,
-                        @Parameter(description = "ID de la actividad a completar", example = "2026-09-05T07:00:00Z") @PathVariable String id) {
-                return activityService.completeActivityTrackpoints(principal.id(), id)
-                                .map(ResponseEntity::ok)
-                                .orElse(ResponseEntity.notFound().build());
-        }
-
-        @PostMapping("/{id}/complete-metrics")
-        @Operation(summary = "Completar frecuencia cardíaca, cadencia y velocidad", description = "Solo rellena los valores nulos y los claramente atípicos: los que se alejan "
-                        + "mucho de la mediana de sus vecinos o son imposibles (FC o cadencia <= 0, "
-                        + "velocidad < 0 o > 15 m/s). El resto de valores se conserva sin cambios. "
-                        + "La interpolación es lineal entre los puntos válidos vecinos. También ajusta "
-                        + "la distancia acumulada descartando retrocesos y saltos que implicarían más "
-                        + "de 15 m/s. No modifica coordenadas ni altitud y no consulta proveedores externos.")
-        @ApiResponses({
-                        @ApiResponse(responseCode = "200", description = "Métricas completadas"),
-                        @ApiResponse(responseCode = "404", description = "La actividad no existe o no pertenece al usuario", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
-        })
-        public ResponseEntity<TrackpointMetricsCompletionResultDto> completeMetrics(
-                        @AuthenticationPrincipal UserPrincipal principal,
-                        @Parameter(description = "ID de la actividad a completar", example = "2026-09-05T07:00:00Z") @PathVariable String id) {
-                return activityService.completeActivityMetrics(principal.id(), id)
-                                .map(ResponseEntity::ok)
-                                .orElse(ResponseEntity.notFound().build());
         }
 
         @DeleteMapping

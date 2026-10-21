@@ -46,13 +46,9 @@ app:
     api-url: ${APP_ELEVATION_API_URL:https://api.open-meteo.com/v1/elevation}
     # Opcional. Si se define, se usa customer-api.open-meteo.com y se envía como apikey.
     api-key: ${APP_ELEVATION_API_KEY:}
-    # En importación solo se interpolan altitudes existentes; el DEM externo lo hace el cron.
-    external-on-import: ${APP_ELEVATION_EXTERNAL_ON_IMPORT:false}
     # Open-Meteo cuenta una llamada por coordenada (límite gratuito: 600/min).
     batch-size: ${APP_ELEVATION_BATCH_SIZE:50}
     timeout-seconds: ${APP_ELEVATION_TIMEOUT_SECONDS:10}
-    # Consulta 1 de cada N puntos y interpola el resto (el DEM tiene ~90 m de resolución).
-    sample-every: ${APP_ELEVATION_SAMPLE_EVERY:30}
     min-interval-millis: ${APP_ELEVATION_MIN_INTERVAL_MILLIS:100}
     # Presupuesto propio por debajo de las 600 llamadas/min de Open-Meteo.
     max-calls-per-minute: ${APP_ELEVATION_MAX_CALLS_PER_MINUTE:500}

@@ -2,6 +2,7 @@ package com.running.api.service;
 
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.projection.ElevationBackfillProjection;
+import com.running.api.util.AltitudeUtils;
 import com.running.api.util.FlatAltitudeDetector;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *     <li>96 ejecuciones/día = 7.680 llamadas/día (límite: 10.000).</li>
  *     <li>~230.400 llamadas/mes (límite: 300.000).</li>
  * </ul>
- * Deja margen para importaciones manuales, reintentos y el endpoint de completado.
+ * Deja margen para importaciones, reintentos y picos puntuales del proveedor.
  * <p>
  * Además de las altitudes ausentes, procesa las actividades con una altitud constante
  * sospechosa (el mismo valor exacto en al menos el 90% de los puntos del dispositivo) para
@@ -84,10 +85,10 @@ public class ElevationBackfillService {
         try {
             List<ElevationBackfillProjection> candidates = new ArrayList<>();
             candidates.addAll(activityRepository.findActivitiesWithMissingAltitude(
-                    TrackpointCompletionService.ALTITUDE_EPSILON,
+                    AltitudeUtils.ALTITUDE_EPSILON,
                     PageRequest.of(0, maxActivitiesPerRun)));
             candidates.addAll(activityRepository.findActivitiesWithFlatAltitude(
-                    TrackpointCompletionService.ALTITUDE_EPSILON,
+                    AltitudeUtils.ALTITUDE_EPSILON,
                     FlatAltitudeDetector.FLAT_ALTITUDE_PERCENT,
                     FlatAltitudeDetector.MIN_FLAT_ALTITUDE_POINTS,
                     PageRequest.of(0, maxActivitiesPerRun)));
