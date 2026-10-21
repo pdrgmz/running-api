@@ -17,9 +17,8 @@ import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
-import com.running.api.repository.GlobalSummaryStatsRepository;
-import com.running.api.repository.PersonalRecordRepository;
 import com.running.api.repository.projection.ElevationCoverageProjection;
+import com.running.api.util.FlatAltitudeDetector;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,10 +30,6 @@ public class GlobalActivityService {
 
     private final ActivityRepository activityRepository;
     private final ActivityTrackpointRepository trackpointRepository;
-    private final GlobalSummaryStatsRepository summaryStatsRepository;
-    private final PersonalRecordRepository personalRecordRepository;
-    private final BackupStorageService backupStorageService;
-    private final FileService fileService;
     private final StatsService statsService;
     private final TrackpointCompletionService trackpointCompletionService;
     private final PlatformTransactionManager transactionManager;
@@ -51,25 +46,42 @@ public class GlobalActivityService {
                 ? 0L
                 : coverage.getTrackpointsWithElevation();
 
-        return buildElevationCoverage(total, withElevation);
+        long flatElevation = trackpointRepository.findFlatElevationPoints(
+                        userId,
+                        TrackpointCompletionService.ALTITUDE_EPSILON,
+                        FlatAltitudeDetector.FLAT_ALTITUDE_PERCENT,
+                        FlatAltitudeDetector.MIN_FLAT_ALTITUDE_POINTS)
+                .stream()
+                .mapToLong(point -> point.getOccurrences() == null ? 0L : point.getOccurrences())
+                .sum();
+
+        return buildElevationCoverage(total, withElevation, flatElevation);
     }
 
-    static ElevationCoverageDto buildElevationCoverage(long total, long withElevation) {
+    static ElevationCoverageDto buildElevationCoverage(long total, long withElevation,
+                                                       long flatElevation) {
         long validWithElevation = Math.min(Math.max(withElevation, 0L), total);
-        long missing = Math.max(0L, total - validWithElevation);
+        long validFlatElevation = Math.min(Math.max(flatElevation, 0L), validWithElevation);
+        long validElevation = validWithElevation - validFlatElevation;
+        long missing = Math.max(0L, total - validElevation);
         double withPercent = total == 0
                 ? 0.0
-                : roundPercentage(validWithElevation * 100.0 / total);
+                : roundPercentage(validElevation * 100.0 / total);
         double missingPercent = total == 0
                 ? 0.0
                 : roundPercentage(100.0 - withPercent);
+        double flatPercent = total == 0
+                ? 0.0
+                : roundPercentage(validFlatElevation * 100.0 / total);
 
         return ElevationCoverageDto.builder()
                 .totalTrackpoints(total)
-                .trackpointsWithElevation(validWithElevation)
+                .trackpointsWithElevation(validElevation)
                 .trackpointsMissingElevation(missing)
+                .trackpointsWithFlatElevation(validFlatElevation)
                 .withElevationPercent(withPercent)
                 .missingElevationPercent(missingPercent)
+                .flatElevationPercent(flatPercent)
                 .build();
     }
 
@@ -79,24 +91,19 @@ public class GlobalActivityService {
 
     /**
      * Aplica el completado de FC, cadencia, velocidad y el ajuste de distancia a
-     * todas las
-     * actividades del usuario. No modifica la altitud ni las coordenadas.
+     * todas las actividades del usuario. Solo rellena huecos nulos y valores muy
+     * alejados de sus vecinos. No modifica la altitud ni las coordenadas.
      * <p>
      * Cada actividad se procesa en su propia transacción: si una falla, las demás
-     * co
-     * // tinúan
-     * y el error se devuelve en el resumen. Al final se recalculan una sola vez las
-     * //
-     * estadísticas globales y los récords personales.
+     * continúan y el error se devuelve en el resumen. Al final se recalculan una sola
+     * vez las estadísticas globales y los récords personales.
      */
     public TrackpointMetricsBatchCompletionResultDto completeAllActivityMetrics(Long userId) {
         List<String> activityIds = activityRepository.findIdsByUserId(userId);
         if (activityIds.isEmpty()) {
             return TrackpointMetricsBatchCompletionResultDto.builder()
                     .activitiesFound(0)
-
                     .errors(Map.of())
-
                     .message("No hay actividades para procesar")
                     .build();
         }
@@ -224,8 +231,9 @@ public class GlobalActivityService {
             actions.add("se completaron " + totalFilled + " valores");
         }
         if (totalRemoved > 0) {
-            actions.add("se descartaron " + totalRemoved + " valores fuera de rango");
-
+            actions.add("se descartaron " + totalRemoved + " valores atípicos");
+        }
+        if (distanceAdjusted > 0) {
             actions.add("se ajustaron " + distanceAdjusted + " distancias");
         }
 

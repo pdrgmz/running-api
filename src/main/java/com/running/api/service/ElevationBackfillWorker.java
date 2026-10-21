@@ -3,6 +3,7 @@ package com.running.api.service;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
+import com.running.api.util.FlatAltitudeDetector;
 import com.running.api.util.GeoUtils;
 import com.running.api.util.SeriesInterpolation;
 import lombok.RequiredArgsConstructor;
@@ -17,10 +18,10 @@ import java.util.Set;
 /**
  * Procesa una actividad concreta para el backfill de altitudes.
  * <p>
- * Solo envía al proveedor los trackpoints que aún no tienen una altitud válida y que
- * además están separados al menos {@code sampleDistanceMeters} del último punto enviado.
- * El resto se interpola. No extrapola más allá del último punto consultado: así una
- * actividad larga se puede completar en varias ejecuciones del cron sin rellenar el
+ * Solo envía al proveedor los trackpoints sin altitud válida o con una altitud constante
+ * sospechosa, y que además están separados al menos {@code sampleDistanceMeters} del último
+ * punto enviado. El resto se interpola. No extrapola más allá del último punto consultado:
+ * así una actividad larga se puede completar en varias ejecuciones del cron sin rellenar el
  * final con una altitud constante.
  */
 @Slf4j
@@ -54,7 +55,10 @@ public class ElevationBackfillWorker {
             return 0;
         }
 
-        List<Integer> sampleIndexes = selectSamples(points, maxCalls, sampleDistanceMeters);
+        // Altitudes constantes sospechosas: se tratan como ausentes para recalcularlas.
+        boolean[] flatAltitudes = FlatAltitudeDetector.detect(points);
+
+        List<Integer> sampleIndexes = selectSamples(points, maxCalls, sampleDistanceMeters, flatAltitudes);
         if (sampleIndexes.isEmpty()) {
             return 0;
         }
@@ -79,7 +83,7 @@ public class ElevationBackfillWorker {
         double[] altitudes = new double[points.size()];
         for (int i = 0; i < points.size(); i++) {
             ActivityTrackpoint point = points.get(i);
-            altitudes[i] = TrackpointCompletionService.isMissingAltitude(point)
+            altitudes[i] = needsAltitude(point, flatAltitudes[i])
                     ? Double.NaN
                     : point.getAltitudeMeters();
         }
@@ -101,7 +105,7 @@ public class ElevationBackfillWorker {
         int applied = 0;
         for (int i = 0; i <= lastSampleIndex; i++) {
             ActivityTrackpoint point = points.get(i);
-            if (TrackpointCompletionService.isMissingAltitude(point)
+            if (needsAltitude(point, flatAltitudes[i])
                     && Double.isFinite(altitudes[i])) {
                 point.setAltitudeMeters(round(altitudes[i], 1));
                 point.setElevationCalculated(true);
@@ -123,14 +127,15 @@ public class ElevationBackfillWorker {
 
     private List<Integer> selectSamples(List<ActivityTrackpoint> points,
                                         int maxCalls,
-                                        double sampleDistanceMeters) {
+                                        double sampleDistanceMeters,
+                                        boolean[] flatAltitudes) {
         List<Integer> samples = new ArrayList<>();
         ActivityTrackpoint lastSample = null;
         double minimumDistance = Math.max(0.0, sampleDistanceMeters);
 
         for (int i = 0; i < points.size() && samples.size() < maxCalls; i++) {
             ActivityTrackpoint point = points.get(i);
-            if (!TrackpointCompletionService.isMissingAltitude(point)
+            if (!needsAltitude(point, flatAltitudes[i])
                     || !TrackpointCompletionService.hasValidCoordinate(point)) {
                 continue;
             }
@@ -145,6 +150,14 @@ public class ElevationBackfillWorker {
         }
 
         return samples;
+    }
+
+    /**
+     * Un punto necesita altitud cuando le falta o cuando su valor es una altitud plana
+     * sospechosa que hay que recalcular.
+     */
+    private static boolean needsAltitude(ActivityTrackpoint point, boolean flat) {
+        return flat || TrackpointCompletionService.isMissingAltitude(point);
     }
 
     private static double round(double value, int decimals) {

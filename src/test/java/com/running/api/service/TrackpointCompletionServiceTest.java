@@ -269,7 +269,7 @@ class TrackpointCompletionServiceTest {
         assertThat(result.getSpeedRemoved()).isEqualTo(1);
         assertThat(result.getTotalRemoved()).isEqualTo(3);
         assertThat(result.getTotalFilled()).isEqualTo(3);
-        assertThat(result.getMessage()).contains("fuera de rango");
+        assertThat(result.getMessage()).contains("valores atípicos");
     }
 
     @Test
@@ -300,6 +300,89 @@ class TrackpointCompletionServiceTest {
         assertThat(result.getTotalRemoved()).isEqualTo(6);
         assertThat(result.getTotalFilled()).isZero();
         assertThat(result.getMessage()).contains("no había puntos vecinos");
+    }
+
+    @Test
+    void completeMetricsRemovesValuesVeryFarFromTheirNeighbors() {
+        ActivityTrackpoint first = point(40.000, -3.000, 100.0, 140, 160, 3.0);
+        ActivityTrackpoint middle = point(40.001, -3.001, 110.0, 210, 220, 10.0);
+        ActivityTrackpoint last = point(40.002, -3.002, 120.0, 160, 170, 4.0);
+        Activity activity = activity(first, middle, last);
+
+        TrackpointCompletionService service = new TrackpointCompletionService(elevationProvider, 10, 0.1);
+        TrackpointMetricsCompletionResultDto result = service.completeMetrics(activity);
+
+        // Valores dentro de los rangos fisiológicos, pero muy lejos de sus vecinos.
+        assertThat(middle.getHeartRate()).isEqualTo(150);
+        assertThat(middle.getCadence()).isEqualTo(165);
+        assertThat(middle.getSpeed()).isCloseTo(3.5, within(1e-9));
+
+        assertThat(result.getHeartRateRemoved()).isEqualTo(1);
+        assertThat(result.getCadenceRemoved()).isEqualTo(1);
+        assertThat(result.getSpeedRemoved()).isEqualTo(1);
+        assertThat(result.getTotalRemoved()).isEqualTo(3);
+        assertThat(result.getTotalFilled()).isEqualTo(3);
+    }
+
+    @Test
+    void completeMetricsKeepsValuesCloseToTheirNeighbors() {
+        ActivityTrackpoint first = point(40.000, -3.000, 100.0, 140, 160, 3.0);
+        ActivityTrackpoint middle = point(40.001, -3.001, 110.0, 180, 190, 7.0);
+        ActivityTrackpoint last = point(40.002, -3.002, 120.0, 160, 170, 4.0);
+        Activity activity = activity(first, middle, last);
+
+        TrackpointCompletionService service = new TrackpointCompletionService(elevationProvider, 10, 0.1);
+        TrackpointMetricsCompletionResultDto result = service.completeMetrics(activity);
+
+        assertThat(middle.getHeartRate()).isEqualTo(180);
+        assertThat(middle.getCadence()).isEqualTo(190);
+        assertThat(middle.getSpeed()).isCloseTo(7.0, within(1e-9));
+        assertThat(result.getTotalRemoved()).isZero();
+        assertThat(result.getTotalFilled()).isZero();
+        assertThat(result.getMessage()).isEqualTo("No había datos que completar");
+    }
+
+    @Test
+    void completeMetricsKeepsZeroSpeedAndLowCadence() {
+        ActivityTrackpoint first = point(40.000, -3.000, 100.0, 140, 25, 10.0);
+        ActivityTrackpoint middle = point(40.001, -3.001, 110.0, 140, 25, 0.0);
+        ActivityTrackpoint last = point(40.002, -3.002, 120.0, 140, 26, 10.0);
+        Activity activity = activity(first, middle, last);
+
+        TrackpointCompletionService service = new TrackpointCompletionService(elevationProvider, 10, 0.1);
+        TrackpointMetricsCompletionResultDto result = service.completeMetrics(activity);
+
+        // Una parada (velocidad 0) y una cadencia baja son valores válidos, no huecos,
+        // aunque se alejen de sus vecinos.
+        assertThat(middle.getSpeed()).isZero();
+        assertThat(middle.getCadence()).isEqualTo(25);
+        assertThat(result.getCadenceRemoved()).isZero();
+        assertThat(result.getSpeedRemoved()).isZero();
+        assertThat(result.getTotalFilled()).isZero();
+    }
+
+    @Test
+    void completeMetricsNeverChangesCoordinatesOrAltitude() {
+        ActivityTrackpoint first = point(40.000, -3.000, 100.0, 140, 80, 3.0);
+        ActivityTrackpoint middle = point(999.0, 999.0, 9999.0, null, null, null);
+        ActivityTrackpoint last = point(40.002, -3.002, 200.0, 160, 90, 5.0);
+        Activity activity = activity(first, middle, last);
+
+        TrackpointCompletionService service = new TrackpointCompletionService(elevationProvider, 10, 0.1);
+        service.completeMetrics(activity);
+
+        assertThat(first.getLatitude()).isEqualTo(40.000);
+        assertThat(first.getLongitude()).isEqualTo(-3.000);
+        assertThat(first.getAltitudeMeters()).isEqualTo(100.0);
+        assertThat(middle.getLatitude()).isEqualTo(999.0);
+        assertThat(middle.getLongitude()).isEqualTo(999.0);
+        assertThat(middle.getAltitudeMeters()).isEqualTo(9999.0);
+        assertThat(last.getLatitude()).isEqualTo(40.002);
+        assertThat(last.getLongitude()).isEqualTo(-3.002);
+        assertThat(last.getAltitudeMeters()).isEqualTo(200.0);
+        assertThat(first.getElevationCalculated()).isNull();
+        assertThat(middle.getElevationCalculated()).isNull();
+        assertThat(last.getElevationCalculated()).isNull();
     }
 
     @Test
@@ -388,6 +471,31 @@ class TrackpointCompletionServiceTest {
         // El resumen de elevación no se recalcula en este endpoint.
         assertThat(activity.getElevationGain()).isNull();
         assertThat(activity.getElevationLoss()).isNull();
+    }
+
+    @Test
+    void completeMetricsKeepsValidActivitySummaryValues() {
+        ActivityTrackpoint first = point(40.000, -3.000, 100.0, 140, 80, 3.0);
+        ActivityTrackpoint middle = point(40.001, -3.001, 110.0, 150, 85, 4.0);
+        ActivityTrackpoint last = point(40.002, -3.002, 120.0, 160, 90, 5.0);
+        Activity activity = activity(first, middle, last);
+        activity.setAvgHeartRate(145);
+        activity.setMaxHeartRate(170);
+        activity.setAvgCadence(82);
+        activity.setMaxCadence(95);
+        activity.setMaxSpeed(5.5);
+
+        TrackpointCompletionService service = new TrackpointCompletionService(elevationProvider, 10, 0.1);
+        TrackpointMetricsCompletionResultDto result = service.completeMetrics(activity);
+
+        // Sin huecos ni atípicos, los valores válidos del resumen se conservan.
+        assertThat(activity.getAvgHeartRate()).isEqualTo(145);
+        assertThat(activity.getMaxHeartRate()).isEqualTo(170);
+        assertThat(activity.getAvgCadence()).isEqualTo(82);
+        assertThat(activity.getMaxCadence()).isEqualTo(95);
+        assertThat(activity.getMaxSpeed()).isCloseTo(5.5, within(1e-9));
+        assertThat(result.getTotalFilled()).isZero();
+        assertThat(result.getTotalRemoved()).isZero();
     }
 
     @Test

@@ -32,7 +32,9 @@ public class GlobalActivityController {
         @GetMapping("/elevation-coverage")
         @Operation(summary = "Obtener la cobertura de altitudes de los trackpoints", description = "Devuelve cuántos trackpoints tienen altitud y cuántos la tienen pendiente, "
                         + "con sus porcentajes. Una altitud nula o 0 se considera pendiente, igual que en "
-                        + "el cron de completado.")
+                        + "el cron de completado. También se consideran pendientes los trackpoints que "
+                        + "comparten una altitud constante sospechosa (el mismo valor exacto en al menos "
+                        + "el 90% de los puntos del dispositivo), que se informan aparte.")
         @ApiResponses({
                         @ApiResponse(responseCode = "200", description = "Cobertura calculada"),
                         @ApiResponse(responseCode = "401", description = "No autenticado o token inválido", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
@@ -44,8 +46,9 @@ public class GlobalActivityController {
 
         @PostMapping("/complete-metrics")
         @Operation(summary = "Completar FC, cadencia, velocidad y distancia en todas las carreras", description = "Recorre todas las actividades del usuario autenticado y aplica el mismo "
-                        + "completado que el endpoint individual: descarta valores fuera de rango "
-                        + "fisiológico, interpola FC, cadencia y velocidad, y ajusta la distancia "
+                        + "completado que el endpoint individual: solo rellena los valores nulos y "
+                        + "los claramente atípicos (muy alejados de la mediana de sus vecinos o "
+                        + "imposibles), interpola FC, cadencia y velocidad, y ajusta la distancia "
                         + "acumulada. No modifica coordenadas ni altitud y no consulta proveedores "
                         + "externos. Cada actividad se procesa en su propia transacción; si una falla, "
                         + "las demás continúan. Al final se recalculan estadísticas y récords.")

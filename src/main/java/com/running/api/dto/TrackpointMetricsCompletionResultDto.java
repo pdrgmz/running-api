@@ -28,19 +28,19 @@ public class TrackpointMetricsCompletionResultDto {
     @Schema(description = "Puntos cuya velocidad se completó", example = "4")
     private int speedFilled;
 
-    @Schema(description = "Valores de frecuencia cardíaca fuera de rango descartados", example = "2")
+    @Schema(description = "Valores de frecuencia cardíaca descartados por ser inválidos o muy atípicos respecto a sus vecinos", example = "2")
     private int heartRateRemoved;
 
-    @Schema(description = "Valores de cadencia fuera de rango descartados", example = "1")
+    @Schema(description = "Valores de cadencia descartados por ser inválidos o muy atípicos respecto a sus vecinos", example = "1")
     private int cadenceRemoved;
 
-    @Schema(description = "Valores de velocidad fuera de rango descartados", example = "3")
+    @Schema(description = "Valores de velocidad descartados por ser inválidos o muy atípicos respecto a sus vecinos", example = "3")
     private int speedRemoved;
 
     @Schema(description = "Total de valores completados entre las tres métricas", example = "27")
     private int totalFilled;
 
-    @Schema(description = "Total de valores fuera de rango descartados", example = "6")
+    @Schema(description = "Total de valores descartados por ser inválidos o muy atípicos", example = "6")
     private int totalRemoved;
 
     @Schema(description = "Puntos cuya distancia acumulada se ajustó", example = "3")

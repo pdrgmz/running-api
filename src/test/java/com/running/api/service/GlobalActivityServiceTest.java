@@ -4,10 +4,13 @@ import com.running.api.dto.ElevationCoverageDto;
 import com.running.api.dto.TrackpointMetricsBatchCompletionResultDto;
 import com.running.api.dto.TrackpointMetricsCompletionResultDto;
 import com.running.api.model.Activity;
+import com.running.api.model.ActivityTrackpoint;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.ActivityTrackpointRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
 import com.running.api.repository.PersonalRecordRepository;
+import com.running.api.repository.projection.ElevationCoverageProjection;
+import com.running.api.repository.projection.FlatElevationProjection;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -16,11 +19,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -46,6 +54,8 @@ class GlobalActivityServiceTest {
         private TrackpointCompletionService trackpointCompletionService;
         @Mock
         private PlatformTransactionManager transactionManager;
+        @Mock
+        private ElevationProvider elevationProvider;
 
         @InjectMocks
         private GlobalActivityService globalActivityService;
@@ -124,6 +134,22 @@ class GlobalActivityServiceTest {
         }
 
         @Test
+        void reportsDistanceAdjustmentsEvenWhenNoValuesWereRemoved() {
+                when(activityRepository.findIdsByUserId(1L)).thenReturn(List.of("a"));
+                when(transactionManager.getTransaction(any()))
+                                .thenAnswer(invocation -> new SimpleTransactionStatus());
+
+                Activity a = Activity.builder().id("a").userId(1L).build();
+                when(activityRepository.findByIdAndUserId("a", 1L)).thenReturn(Optional.of(a));
+                when(trackpointCompletionService.completeMetrics(a))
+                                .thenReturn(metricsResult("a", 5, 0, 0, 0, 0, 0, 0, 2, 10.0));
+
+                TrackpointMetricsBatchCompletionResultDto result = globalActivityService.completeAllActivityMetrics(1L);
+
+                assertThat(result.getMessage()).contains("se ajustaron 2 distancias");
+        }
+
+        @Test
         void returnsEmptySummaryWhenThereAreNoActivities() {
                 when(activityRepository.findIdsByUserId(1L)).thenReturn(List.of());
 
@@ -133,6 +159,70 @@ class GlobalActivityServiceTest {
                 assertThat(result.getActivitiesProcessed()).isZero();
                 assertThat(result.getMessage()).isEqualTo("No hay actividades para procesar");
                 verifyNoInteractions(statsService);
+        }
+
+        @Test
+        void globalCompletionOnlyFillsMetricsAndKeepsCoordinatesAndAltitudeUntouched() {
+                when(activityRepository.findIdsByUserId(1L)).thenReturn(List.of("activity"));
+                when(transactionManager.getTransaction(any()))
+                                .thenAnswer(invocation -> new SimpleTransactionStatus());
+
+                Activity activity = Activity.builder()
+                                .id("activity")
+                                .userId(1L)
+                                .trackpoints(new ArrayList<>())
+                                .build();
+                activity.addTrackpoint(ActivityTrackpoint.builder()
+                                .latitude(40.000)
+                                .longitude(-3.000)
+                                .altitudeMeters(100.0)
+                                .heartRate(140)
+                                .cadence(80)
+                                .speed(3.0)
+                                .build());
+                activity.addTrackpoint(ActivityTrackpoint.builder()
+                                .latitude(null)
+                                .longitude(null)
+                                .altitudeMeters(null)
+                                .heartRate(null)
+                                .cadence(null)
+                                .speed(null)
+                                .build());
+                activity.addTrackpoint(ActivityTrackpoint.builder()
+                                .latitude(40.002)
+                                .longitude(-3.002)
+                                .altitudeMeters(200.0)
+                                .heartRate(160)
+                                .cadence(90)
+                                .speed(5.0)
+                                .build());
+
+                when(activityRepository.findByIdAndUserId("activity", 1L)).thenReturn(Optional.of(activity));
+
+                TrackpointCompletionService realCompletionService =
+                                new TrackpointCompletionService(elevationProvider, 10, 0.1, false);
+                GlobalActivityService service = new GlobalActivityService(activityRepository, trackpointRepository,
+                                statsService, realCompletionService, transactionManager);
+
+                TrackpointMetricsBatchCompletionResultDto result = service.completeAllActivityMetrics(1L);
+
+                ActivityTrackpoint middle = activity.getTrackpoints().get(1);
+                assertThat(middle.getHeartRate()).isEqualTo(150);
+                assertThat(middle.getCadence()).isEqualTo(85);
+                assertThat(middle.getSpeed()).isCloseTo(4.0, within(1e-9));
+
+                assertThat(middle.getLatitude()).isNull();
+                assertThat(middle.getLongitude()).isNull();
+                assertThat(middle.getAltitudeMeters()).isNull();
+                assertThat(activity.getTrackpoints().get(0).getLatitude()).isEqualTo(40.000);
+                assertThat(activity.getTrackpoints().get(0).getAltitudeMeters()).isEqualTo(100.0);
+                assertThat(activity.getTrackpoints().get(2).getLatitude()).isEqualTo(40.002);
+                assertThat(activity.getTrackpoints().get(2).getAltitudeMeters()).isEqualTo(200.0);
+
+                assertThat(result.getActivitiesProcessed()).isEqualTo(1);
+                assertThat(result.getTotalFilled()).isEqualTo(3);
+                assertThat(result.getTotalRemoved()).isZero();
+                verify(statsService).recalculateStatsAndRecords(1L);
         }
 
         private static TrackpointMetricsCompletionResultDto metricsResult(String activityId,
@@ -164,18 +254,20 @@ class GlobalActivityServiceTest {
 
         @Test
         void calculatesElevationCoveragePercentages() {
-                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(200, 150);
+                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(200, 150, 0);
 
                 assertThat(coverage.getTotalTrackpoints()).isEqualTo(200);
                 assertThat(coverage.getTrackpointsWithElevation()).isEqualTo(150);
                 assertThat(coverage.getTrackpointsMissingElevation()).isEqualTo(50);
+                assertThat(coverage.getTrackpointsWithFlatElevation()).isZero();
                 assertThat(coverage.getWithElevationPercent()).isEqualTo(75.0);
                 assertThat(coverage.getMissingElevationPercent()).isEqualTo(25.0);
+                assertThat(coverage.getFlatElevationPercent()).isZero();
         }
 
         @Test
         void roundsPercentagesToTwoDecimals() {
-                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(3, 1);
+                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(3, 1, 0);
 
                 assertThat(coverage.getWithElevationPercent()).isEqualTo(33.33);
                 assertThat(coverage.getMissingElevationPercent()).isEqualTo(66.67);
@@ -183,22 +275,95 @@ class GlobalActivityServiceTest {
 
         @Test
         void returnsZeroPercentagesWhenThereAreNoTrackpoints() {
-                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(0, 0);
+                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(0, 0, 0);
 
                 assertThat(coverage.getTotalTrackpoints()).isZero();
                 assertThat(coverage.getTrackpointsWithElevation()).isZero();
                 assertThat(coverage.getTrackpointsMissingElevation()).isZero();
+                assertThat(coverage.getTrackpointsWithFlatElevation()).isZero();
                 assertThat(coverage.getWithElevationPercent()).isZero();
                 assertThat(coverage.getMissingElevationPercent()).isZero();
+                assertThat(coverage.getFlatElevationPercent()).isZero();
         }
 
         @Test
         void clampsInconsistentCounts() {
-                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(10, 12);
+                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(10, 12, 0);
 
                 assertThat(coverage.getTrackpointsWithElevation()).isEqualTo(10);
                 assertThat(coverage.getTrackpointsMissingElevation()).isZero();
                 assertThat(coverage.getWithElevationPercent()).isEqualTo(100.0);
                 assertThat(coverage.getMissingElevationPercent()).isZero();
+        }
+
+        @Test
+        void subtractsFlatAltitudesFromTheValidCountAndCountsThemAsPending() {
+                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(200, 150, 40);
+
+                assertThat(coverage.getTotalTrackpoints()).isEqualTo(200);
+                assertThat(coverage.getTrackpointsWithElevation()).isEqualTo(110);
+                assertThat(coverage.getTrackpointsMissingElevation()).isEqualTo(90);
+                assertThat(coverage.getTrackpointsWithFlatElevation()).isEqualTo(40);
+                assertThat(coverage.getWithElevationPercent()).isEqualTo(55.0);
+                assertThat(coverage.getMissingElevationPercent()).isEqualTo(45.0);
+                assertThat(coverage.getFlatElevationPercent()).isEqualTo(20.0);
+        }
+
+        @Test
+        void clampsFlatAltitudesToTheValidCount() {
+                ElevationCoverageDto coverage = GlobalActivityService.buildElevationCoverage(10, 5, 8);
+
+                assertThat(coverage.getTrackpointsWithElevation()).isZero();
+                assertThat(coverage.getTrackpointsMissingElevation()).isEqualTo(10);
+                assertThat(coverage.getTrackpointsWithFlatElevation()).isEqualTo(5);
+                assertThat(coverage.getWithElevationPercent()).isZero();
+                assertThat(coverage.getMissingElevationPercent()).isEqualTo(100.0);
+                assertThat(coverage.getFlatElevationPercent()).isEqualTo(50.0);
+        }
+
+        @Test
+        void coverageTreatsFlatAltitudesAsPendingAndReportsThemSeparately() {
+                when(trackpointRepository.getElevationCoverage(eq(1L), anyDouble()))
+                                .thenReturn(coverageProjection(200L, 150L));
+                when(trackpointRepository.findFlatElevationPoints(eq(1L), anyDouble(), anyInt(), anyInt()))
+                                .thenReturn(List.of(flatGroup("a", 30L), flatGroup("b", 10L)));
+
+                ElevationCoverageDto coverage = globalActivityService.getElevationCoverage(1L);
+
+                assertThat(coverage.getTotalTrackpoints()).isEqualTo(200);
+                assertThat(coverage.getTrackpointsWithElevation()).isEqualTo(110);
+                assertThat(coverage.getTrackpointsMissingElevation()).isEqualTo(90);
+                assertThat(coverage.getTrackpointsWithFlatElevation()).isEqualTo(40);
+                assertThat(coverage.getWithElevationPercent()).isEqualTo(55.0);
+                assertThat(coverage.getMissingElevationPercent()).isEqualTo(45.0);
+                assertThat(coverage.getFlatElevationPercent()).isEqualTo(20.0);
+        }
+
+        private static ElevationCoverageProjection coverageProjection(Long total, Long withElevation) {
+                return new ElevationCoverageProjection() {
+                        @Override
+                        public Long getTotalTrackpoints() {
+                                return total;
+                        }
+
+                        @Override
+                        public Long getTrackpointsWithElevation() {
+                                return withElevation;
+                        }
+                };
+        }
+
+        private static FlatElevationProjection flatGroup(String activityId, Long occurrences) {
+                return new FlatElevationProjection() {
+                        @Override
+                        public String getActivityId() {
+                                return activityId;
+                        }
+
+                        @Override
+                        public Long getOccurrences() {
+                                return occurrences;
+                        }
+                };
         }
 }

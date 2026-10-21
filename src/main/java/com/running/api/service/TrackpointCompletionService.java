@@ -8,6 +8,7 @@ import com.running.api.util.DistanceSeries;
 import com.running.api.util.ElevationAccumulator;
 import com.running.api.util.RunningMetrics;
 import com.running.api.util.SeriesInterpolation;
+import com.running.api.util.SeriesOutliers;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,15 +23,14 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
- * Completa los datos que falten en los trackpoints de una actividad:
+ * Completa los datos que falten en los trackpoints de una actividad.
  * <ul>
- *     <li>Latitud y longitud: interpolación lineal con los puntos GPS válidos vecinos.</li>
- *     <li>Altitud, frecuencia cardíaca, cadencia y velocidad: interpolación con los valores
- *     válidos vecinos (los extremos usan el vecino más cercano).</li>
- *     <li>FC, cadencia y velocidad fuera de los rangos fisiológicos se descartan antes de
- *     interpolar, para eliminar picos corruptos del sensor.</li>
- *     <li>Si toda la altitud es 0 o nula, se consulta un modelo digital de elevaciones
- *     (Open-Meteo) usando las coordenadas GPS y se interpolan las altitudes restantes.</li>
+ *     <li>{@link #complete(Activity)} rellena latitud, longitud, altitud, frecuencia
+ *     cardíaca, cadencia y velocidad interpolando con los puntos vecinos. La FC, la cadencia
+ *     y la velocidad fuera de los rangos fisiológicos se descartan antes de interpolar.</li>
+ *     <li>{@link #completeMetrics(Activity)} solo rellena la FC, la cadencia y la velocidad.
+ *     Respeta los valores existentes salvo que sean nulos, inválidos o se alejen claramente
+ *     de sus vecinos. Nunca modifica coordenadas ni altitud.</li>
  * </ul>
  * La función no persiste nada: modifica la {@link Activity} recibida para que pueda usarse
  * tanto durante la importación como sobre una entidad ya cargada.
@@ -40,6 +40,9 @@ import java.util.function.Predicate;
 public class TrackpointCompletionService {
 
     public static final double ALTITUDE_EPSILON = 1e-6;
+
+    private static final int OUTLIER_NEIGHBOR_WINDOW = 10;
+    private static final int OUTLIER_MIN_NEIGHBORS = 2;
 
     private final ElevationProvider elevationProvider;
     private final int elevationSampleEvery;
@@ -85,9 +88,9 @@ public class TrackpointCompletionService {
 
     /**
      * Completa únicamente la frecuencia cardíaca, la cadencia y la velocidad de los
-     * trackpoints usando los valores válidos vecinos. Antes de interpolar descarta los
-     * valores fuera de los rangos fisiológicos. No modifica coordenadas ni altitud y no
-     * consulta proveedores externos.
+     * trackpoints. Solo interpola los huecos nulos y los valores inválidos o que se alejan
+     * claramente de sus vecinos; el resto de valores se conserva tal cual. No modifica
+     * coordenadas ni altitud y no consulta proveedores externos.
      *
      * @param activity actividad a completar (se modifica in-place)
      * @return resumen de cuántos valores se completaron y se descartaron
@@ -110,29 +113,31 @@ public class TrackpointCompletionService {
 
         DistanceAdjustment distanceAdjustment = adjustDistances(points);
 
-        int heartRateRemoved = sanitizeIntegerField(points,
+        int heartRateRemoved = removeNeighborOutlierIntegers(points,
                 ActivityTrackpoint::getHeartRate,
                 ActivityTrackpoint::setHeartRate,
-                RunningMetrics::isPlausibleHeartRate);
+                RunningMetrics.ABSOLUTE_MAX_HEART_RATE_BPM,
+                RunningMetrics.NEIGHBOR_OUTLIER_HEART_RATE_DELTA_BPM);
 
-        int cadenceRemoved = sanitizeIntegerField(points,
+        int cadenceRemoved = removeNeighborOutlierIntegers(points,
                 ActivityTrackpoint::getCadence,
                 ActivityTrackpoint::setCadence,
-                RunningMetrics::isPlausibleCadence);
+                RunningMetrics.ABSOLUTE_MAX_CADENCE_SPM,
+                RunningMetrics.NEIGHBOR_OUTLIER_CADENCE_DELTA_SPM);
 
-        int speedRemoved = sanitizeSpeed(points);
+        int speedRemoved = removeNeighborOutlierSpeeds(points);
 
         int heartRateFilled = fillIntegerField(points,
                 ActivityTrackpoint::getHeartRate,
                 ActivityTrackpoint::setHeartRate,
-                value -> !RunningMetrics.isPlausibleHeartRate(value));
+                value -> value == null);
 
         int cadenceFilled = fillIntegerField(points,
                 ActivityTrackpoint::getCadence,
                 ActivityTrackpoint::setCadence,
-                value -> !RunningMetrics.isPlausibleCadence(value));
+                value -> value == null);
 
-        int speedFilled = fillSpeed(points);
+        int speedFilled = fillSpeed(points, value -> value == null);
 
         updateTelemetrySummary(activity, points);
 
@@ -381,8 +386,11 @@ public class TrackpointCompletionService {
         double discardedMeters = 0.0;
 
         for (int i = 0; i < size; i++) {
-            if (invalidOriginal[i] || !hasOriginal[i] || Math.abs(original[i] - adjusted[i]) > 1e-6) {
+            boolean needsUpdate = invalidOriginal[i] || !hasOriginal[i]
+                    || Math.abs(original[i] - adjusted[i]) > 1e-6;
+            if (needsUpdate) {
                 adjustedPoints++;
+                points.get(i).setDistanceMeters(adjusted[i]);
             }
 
             if (i > 0 && hasOriginal[i] && hasOriginal[i - 1]) {
@@ -392,8 +400,6 @@ public class TrackpointCompletionService {
                     discardedMeters += originalIncrement - adjustedIncrement;
                 }
             }
-
-            points.get(i).setDistanceMeters(adjusted[i]);
         }
 
         return new DistanceAdjustment(adjustedPoints, discardedMeters);
@@ -401,6 +407,7 @@ public class TrackpointCompletionService {
 
     /**
      * Descarta las velocidades no finitas, no positivas o superiores al máximo plausible.
+     * Es el criterio que usa el completado completo de trackpoints.
      *
      * @return número de valores descartados
      */
@@ -416,6 +423,89 @@ public class TrackpointCompletionService {
         return removed;
     }
 
+    /**
+     * Descarta los valores de una serie entera que sean inválidos (cero, negativos o
+     * superiores al máximo absoluto) o que se alejen claramente de la mediana de sus
+     * vecinos. Los huecos resultantes se interpolan después con los valores válidos.
+     *
+     * @return número de valores descartados
+     */
+    private int removeNeighborOutlierIntegers(List<ActivityTrackpoint> points,
+                                              Function<ActivityTrackpoint, Integer> getter,
+                                              BiConsumer<ActivityTrackpoint, Integer> setter,
+                                              int absoluteMax,
+                                              double minDelta) {
+        double[] values = new double[points.size()];
+        int removed = 0;
+
+        for (int i = 0; i < points.size(); i++) {
+            ActivityTrackpoint point = points.get(i);
+            Integer value = getter.apply(point);
+
+            if (value == null) {
+                values[i] = Double.NaN;
+            } else if (value <= 0 || value > absoluteMax) {
+                setter.accept(point, null);
+                values[i] = Double.NaN;
+                removed++;
+            } else {
+                values[i] = value;
+            }
+        }
+
+        boolean[] outliers = SeriesOutliers.detect(values, OUTLIER_NEIGHBOR_WINDOW,
+                OUTLIER_MIN_NEIGHBORS, minDelta);
+
+        for (int i = 0; i < points.size(); i++) {
+            if (outliers[i]) {
+                setter.accept(points.get(i), null);
+                removed++;
+            }
+        }
+
+        return removed;
+    }
+
+    /**
+     * Descarta las velocidades no finitas, negativas, superiores al máximo absoluto o que
+     * se alejen claramente de la mediana de sus vecinos. Una velocidad 0 se considera
+     * válida (el corredor está parado) y no se rellena.
+     *
+     * @return número de valores descartados
+     */
+    private int removeNeighborOutlierSpeeds(List<ActivityTrackpoint> points) {
+        double[] values = new double[points.size()];
+        int removed = 0;
+
+        for (int i = 0; i < points.size(); i++) {
+            Double speed = points.get(i).getSpeed();
+
+            if (speed == null) {
+                values[i] = Double.NaN;
+            } else if (!Double.isFinite(speed) || speed < 0.0
+                    || speed > RunningMetrics.ABSOLUTE_MAX_SPEED_MPS) {
+                points.get(i).setSpeed(null);
+                values[i] = Double.NaN;
+                removed++;
+            } else {
+                values[i] = speed;
+            }
+        }
+
+        boolean[] outliers = SeriesOutliers.detect(values, OUTLIER_NEIGHBOR_WINDOW,
+                OUTLIER_MIN_NEIGHBORS, RunningMetrics.NEIGHBOR_OUTLIER_SPEED_DELTA_MPS);
+
+        for (int i = 0; i < points.size(); i++) {
+            // Una velocidad 0 es una parada real, no un valor atípico que haya que rellenar.
+            if (outliers[i] && values[i] != 0.0) {
+                points.get(i).setSpeed(null);
+                removed++;
+            }
+        }
+
+        return removed;
+    }
+
     private static String buildMessage(String completedMessage, int totalFilled, int totalRemoved,
                                        int distanceAdjusted, double distanceDiscardedMeters) {
         StringBuilder message = new StringBuilder();
@@ -426,11 +516,11 @@ public class TrackpointCompletionService {
 
         if (totalFilled == 0 && totalRemoved > 0) {
             message.append("Se descartaron ").append(totalRemoved)
-                    .append(" valores fuera de rango; no había puntos vecinos para interpolar");
+                    .append(" valores atípicos; no había puntos vecinos de referencia para interpolar");
         } else if (totalFilled > 0) {
             message.append(completedMessage);
             if (totalRemoved > 0) {
-                message.append("; se descartaron ").append(totalRemoved).append(" valores fuera de rango");
+                message.append("; se descartaron ").append(totalRemoved).append(" valores atípicos");
             }
         }
 
@@ -448,28 +538,29 @@ public class TrackpointCompletionService {
     }
 
     private int fillSpeed(List<ActivityTrackpoint> points) {
+        return fillSpeed(points, value -> !RunningMetrics.isPlausibleSpeed(value));
+    }
+
+    private int fillSpeed(List<ActivityTrackpoint> points, Predicate<Double> isMissing) {
         int filled = fillDoubleField(points,
                 ActivityTrackpoint::getSpeed,
                 ActivityTrackpoint::setSpeed,
-                value -> !RunningMetrics.isPlausibleSpeed(value));
+                isMissing,
+                3);
 
         if (filled > 0) {
-            for (ActivityTrackpoint point : points) {
-                if (point.getSpeed() != null && point.getSpeed() > 0.0) {
-                    point.setSpeed(round(point.getSpeed(), 3));
-                }
-            }
             return filled;
         }
 
         // Sin ninguna velocidad válida: se deriva de la distancia acumulada y el tiempo.
-        return deriveSpeedsFromDistance(points);
+        return deriveSpeedsFromDistance(points, isMissing);
     }
 
     private int fillDoubleField(List<ActivityTrackpoint> points,
                                 Function<ActivityTrackpoint, Double> getter,
                                 BiConsumer<ActivityTrackpoint, Double> setter,
-                                Predicate<Double> isMissing) {
+                                Predicate<Double> isMissing,
+                                int decimals) {
         double[] values = new double[points.size()];
         boolean[] wasMissing = new boolean[points.size()];
         int missing = 0;
@@ -492,21 +583,21 @@ public class TrackpointCompletionService {
         int applied = 0;
         for (int i = 0; i < points.size(); i++) {
             if (wasMissing[i] && SeriesInterpolation.isValid(values[i])) {
-                setter.accept(points.get(i), values[i]);
+                setter.accept(points.get(i), round(values[i], decimals));
                 applied++;
             }
         }
         return applied;
     }
 
-    private int deriveSpeedsFromDistance(List<ActivityTrackpoint> points) {
+    private int deriveSpeedsFromDistance(List<ActivityTrackpoint> points, Predicate<Double> isMissing) {
         int filled = 0;
 
         for (int i = 1; i < points.size(); i++) {
             ActivityTrackpoint current = points.get(i);
             ActivityTrackpoint previous = points.get(i - 1);
 
-            if (!isMissingSpeed(current.getSpeed())
+            if (!isMissing.test(current.getSpeed())
                     || current.getDistanceMeters() == null || previous.getDistanceMeters() == null
                     || current.getTimestamp() == null || previous.getTimestamp() == null) {
                 continue;
@@ -528,7 +619,7 @@ public class TrackpointCompletionService {
         if (points.size() > 1) {
             ActivityTrackpoint first = points.get(0);
             Double nextSpeed = points.get(1).getSpeed();
-            if (isMissingSpeed(first.getSpeed()) && !isMissingSpeed(nextSpeed)) {
+            if (isMissing.test(first.getSpeed()) && !isMissing.test(nextSpeed)) {
                 first.setSpeed(nextSpeed);
                 filled++;
             }
@@ -708,7 +799,10 @@ public class TrackpointCompletionService {
         }
 
         if (heartRateCount > 0) {
-            activity.setAvgHeartRate((int) Math.round((double) heartRateSum / heartRateCount));
+            if (activity.getAvgHeartRate() == null
+                    || !RunningMetrics.isPlausibleHeartRate(activity.getAvgHeartRate())) {
+                activity.setAvgHeartRate((int) Math.round((double) heartRateSum / heartRateCount));
+            }
             if (activity.getMaxHeartRate() == null
                     || !RunningMetrics.isPlausibleHeartRate(activity.getMaxHeartRate())
                     || heartRateMax > activity.getMaxHeartRate()) {
@@ -726,7 +820,10 @@ public class TrackpointCompletionService {
         }
 
         if (cadenceCount > 0) {
-            activity.setAvgCadence((int) Math.round((double) cadenceSum / cadenceCount));
+            if (activity.getAvgCadence() == null
+                    || !RunningMetrics.isPlausibleCadence(activity.getAvgCadence())) {
+                activity.setAvgCadence((int) Math.round((double) cadenceSum / cadenceCount));
+            }
             if (activity.getMaxCadence() == null
                     || !RunningMetrics.isPlausibleCadence(activity.getMaxCadence())
                     || cadenceMax > activity.getMaxCadence()) {
@@ -856,10 +953,6 @@ public class TrackpointCompletionService {
 
     private static boolean isValidAltitude(Double altitude) {
         return altitude != null && Double.isFinite(altitude) && Math.abs(altitude) > ALTITUDE_EPSILON;
-    }
-
-    private static boolean isMissingSpeed(Double speed) {
-        return !RunningMetrics.isPlausibleSpeed(speed);
     }
 
     private static double round(double value, int decimals) {

@@ -131,6 +131,88 @@ class ElevationBackfillWorkerTest {
         assertThat(farther.getAltitudeMeters()).isEqualTo(300.0);
     }
 
+    @Test
+    void recalculatesFlatConstantAltitudes() {
+        ActivityTrackpoint[] points = new ActivityTrackpoint[12];
+        for (int i = 0; i < points.length; i++) {
+            points[i] = point(40.0 + i * 0.001, -3.0, 30.0);
+        }
+        Activity activity = activity(points);
+
+        FakeElevationProvider provider = new FakeElevationProvider(elevations(12, 100.0));
+        ElevationBackfillWorker worker = worker(activity, provider);
+
+        int used = worker.processActivity(activity.getId(), 12, 0.0, new HashSet<>());
+
+        assertThat(used).isEqualTo(12);
+        for (int i = 0; i < points.length; i++) {
+            assertThat(points[i].getAltitudeMeters()).isEqualTo(100.0 + i);
+            assertThat(points[i].getElevationCalculated()).isTrue();
+        }
+    }
+
+    @Test
+    void keepsVariedAltitudesWhenRecalculatingAFlatActivity() {
+        List<ActivityTrackpoint> points = new ArrayList<>();
+        for (int i = 0; i < 9; i++) {
+            points.add(point(40.0 + i * 0.001, -3.0, 30.0));
+        }
+        ActivityTrackpoint varied = point(40.009, -3.0, 45.0);
+        points.add(varied);
+        for (int i = 10; i < 20; i++) {
+            points.add(point(40.0 + i * 0.001, -3.0, 30.0));
+        }
+        Activity activity = activity(points.toArray(new ActivityTrackpoint[0]));
+
+        // 19 de 20 puntos con altitud del dispositivo comparten el valor 30.0 (95%).
+        FakeElevationProvider provider = new FakeElevationProvider(elevations(19, 100.0));
+        ElevationBackfillWorker worker = worker(activity, provider);
+
+        int used = worker.processActivity(activity.getId(), 20, 0.0, new HashSet<>());
+
+        assertThat(used).isEqualTo(19);
+        assertThat(provider.lastCoordinates).hasSize(19);
+        assertThat(varied.getAltitudeMeters()).isEqualTo(45.0);
+        assertThat(varied.getElevationCalculated()).isNull();
+        assertThat(points.get(0).getAltitudeMeters()).isEqualTo(100.0);
+        assertThat(points.get(19).getAltitudeMeters()).isEqualTo(118.0);
+    }
+
+    @Test
+    void respectsTheBudgetWhenRecalculatingFlatAltitudes() {
+        ActivityTrackpoint[] points = new ActivityTrackpoint[12];
+        for (int i = 0; i < points.length; i++) {
+            points[i] = point(40.0 + i * 0.001, -3.0, 30.0);
+        }
+        Activity activity = activity(points);
+
+        FakeElevationProvider provider = new FakeElevationProvider(elevations(5, 100.0));
+        ElevationBackfillWorker worker = worker(activity, provider);
+
+        int used = worker.processActivity(activity.getId(), 5, 0.0, new HashSet<>());
+
+        assertThat(used).isEqualTo(5);
+        assertThat(points[4].getAltitudeMeters()).isEqualTo(104.0);
+        assertThat(points[5].getAltitudeMeters()).isEqualTo(30.0);
+    }
+
+    @Test
+    void doesNotQueryCalculatedFlatAltitudesAgain() {
+        ActivityTrackpoint first = point(40.000, -3.000, 30.0);
+        ActivityTrackpoint second = point(40.001, -3.001, 30.0);
+        first.setElevationCalculated(true);
+        second.setElevationCalculated(true);
+        Activity activity = activity(first, second);
+
+        FakeElevationProvider provider = new FakeElevationProvider(elevations(2, 100.0));
+        ElevationBackfillWorker worker = worker(activity, provider);
+
+        int used = worker.processActivity(activity.getId(), 10, 0.0, new HashSet<>());
+
+        assertThat(used).isZero();
+        assertThat(provider.lastCoordinates).isEmpty();
+    }
+
     private static ElevationBackfillWorker worker(Activity activity, ElevationProvider provider) {
         ActivityRepository repository = mock(ActivityRepository.class);
         when(repository.findById(activity.getId())).thenReturn(Optional.of(activity));
@@ -158,6 +240,14 @@ class ElevationBackfillWorkerTest {
                 .longitude(longitude)
                 .altitudeMeters(altitude)
                 .build();
+    }
+
+    private static Double[] elevations(int count, double start) {
+        Double[] values = new Double[count];
+        for (int i = 0; i < count; i++) {
+            values[i] = start + i;
+        }
+        return values;
     }
 
     private static class FakeElevationProvider implements ElevationProvider {

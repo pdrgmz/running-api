@@ -1,12 +1,16 @@
 package com.running.api.service;
 
 import com.running.api.repository.ActivityRepository;
+import com.running.api.repository.projection.ElevationBackfillProjection;
+import com.running.api.util.FlatAltitudeDetector;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -23,6 +27,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *     <li>~230.400 llamadas/mes (límite: 300.000).</li>
  * </ul>
  * Deja margen para importaciones manuales, reintentos y el endpoint de completado.
+ * <p>
+ * Además de las altitudes ausentes, procesa las actividades con una altitud constante
+ * sospechosa (el mismo valor exacto en al menos el 90% de los puntos del dispositivo) para
+ * recalcularlas con el modelo digital.
  */
 @Slf4j
 @Service
@@ -74,9 +82,23 @@ public class ElevationBackfillService {
         Set<Long> affectedUsers = new HashSet<>();
 
         try {
-            List<String> activityIds = activityRepository.findActivityIdsWithMissingAltitude(
+            List<ElevationBackfillProjection> candidates = new ArrayList<>();
+            candidates.addAll(activityRepository.findActivitiesWithMissingAltitude(
                     TrackpointCompletionService.ALTITUDE_EPSILON,
-                    PageRequest.of(0, maxActivitiesPerRun));
+                    PageRequest.of(0, maxActivitiesPerRun)));
+            candidates.addAll(activityRepository.findActivitiesWithFlatAltitude(
+                    TrackpointCompletionService.ALTITUDE_EPSILON,
+                    FlatAltitudeDetector.FLAT_ALTITUDE_PERCENT,
+                    FlatAltitudeDetector.MIN_FLAT_ALTITUDE_POINTS,
+                    PageRequest.of(0, maxActivitiesPerRun)));
+
+            List<String> activityIds = candidates.stream()
+                    .sorted(Comparator.comparing(ElevationBackfillProjection::getStartTime,
+                            Comparator.nullsLast(Comparator.naturalOrder())))
+                    .map(ElevationBackfillProjection::getActivityId)
+                    .distinct()
+                    .limit(maxActivitiesPerRun)
+                    .toList();
 
             for (String activityId : activityIds) {
                 if (remaining <= 0) {

@@ -3,6 +3,7 @@ package com.running.api.repository;
 import com.running.api.model.Activity;
 import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.projection.DailyTrimpProjection;
+import com.running.api.repository.projection.ElevationBackfillProjection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -94,7 +95,8 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
      * Se ordenan de más antigua a más reciente para que el cron no deje datos históricos atrás.
      */
     @Query("""
-        SELECT a.id FROM Activity a
+        SELECT a.id AS activityId, a.startTime AS startTime
+        FROM Activity a
         WHERE EXISTS (
             SELECT 1 FROM ActivityTrackpoint t
             WHERE t.activity.id = a.id
@@ -106,5 +108,34 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
         )
         ORDER BY a.startTime ASC
         """)
-    List<String> findActivityIdsWithMissingAltitude(@Param("epsilon") double epsilon, Pageable pageable);
+    List<ElevationBackfillProjection> findActivitiesWithMissingAltitude(@Param("epsilon") double epsilon,
+                                                                        Pageable pageable);
+
+    /**
+     * Actividades con una altitud constante sospechosa: un mismo valor exacto cubre al menos
+     * el porcentaje indicado de los trackpoints con altitud registrada por el dispositivo.
+     * Las altitudes ya calculadas (interpolación o modelo digital) no cuentan, de modo que
+     * una actividad deja de estar pendiente en cuanto se recalcula. Se ordenan de más antigua
+     * a más reciente.
+     */
+    @Query("""
+        SELECT t.activity.id AS activityId, MIN(t.activity.startTime) AS startTime
+        FROM ActivityTrackpoint t
+        WHERE t.altitudeMeters IS NOT NULL
+          AND ABS(t.altitudeMeters) > :epsilon
+          AND (t.elevationCalculated IS NULL OR t.elevationCalculated = false)
+        GROUP BY t.activity.id, t.altitudeMeters
+        HAVING COUNT(t) >= :minPoints
+           AND COUNT(t) * 100 >= :flatPercent * (
+               SELECT COUNT(t2) FROM ActivityTrackpoint t2
+               WHERE t2.activity.id = t.activity.id
+                 AND t2.altitudeMeters IS NOT NULL
+                 AND ABS(t2.altitudeMeters) > :epsilon
+                 AND (t2.elevationCalculated IS NULL OR t2.elevationCalculated = false))
+        ORDER BY MIN(t.activity.startTime) ASC
+        """)
+    List<ElevationBackfillProjection> findActivitiesWithFlatAltitude(@Param("epsilon") double epsilon,
+                                                                     @Param("flatPercent") int flatPercent,
+                                                                     @Param("minPoints") int minPoints,
+                                                                     Pageable pageable);
 }

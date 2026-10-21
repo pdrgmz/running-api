@@ -9,7 +9,6 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.running.api.dto.TrackpointCompletionResultDto;
@@ -34,11 +33,9 @@ public class ActivityService {
     private final ActivityTrackpointRepository trackpointRepository;
     private final GlobalSummaryStatsRepository summaryStatsRepository;
     private final PersonalRecordRepository personalRecordRepository;
-    private final BackupStorageService backupStorageService;
     private final FileService fileService;
     private final StatsService statsService;
     private final TrackpointCompletionService trackpointCompletionService;
-    private final PlatformTransactionManager transactionManager;
 
     @Transactional(readOnly = true)
     public Page<Activity> getAllActivities(Long userId, Pageable pageable) {

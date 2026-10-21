@@ -1,22 +1,8 @@
 package com.running.api.controller;
 
-import com.running.api.dto.ElevationCoverageDto;
-import com.running.api.dto.ErrorResponseDto;
-import com.running.api.dto.TrackpointCompletionResultDto;
-import com.running.api.dto.TrackpointMetricsBatchCompletionResultDto;
-import com.running.api.dto.TrackpointMetricsCompletionResultDto;
-import com.running.api.model.Activity;
-import com.running.api.model.ActivityTrackpoint;
-import com.running.api.security.UserPrincipal;
-import com.running.api.service.ActivityService;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.Schema;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
-import io.swagger.v3.oas.annotations.responses.ApiResponses;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
+import java.util.List;
+import java.util.Map;
+
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -32,8 +18,22 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
-import java.util.Map;
+import com.running.api.dto.ErrorResponseDto;
+import com.running.api.dto.TrackpointCompletionResultDto;
+import com.running.api.dto.TrackpointMetricsCompletionResultDto;
+import com.running.api.model.Activity;
+import com.running.api.model.ActivityTrackpoint;
+import com.running.api.security.UserPrincipal;
+import com.running.api.service.ActivityService;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/v1/activities")
@@ -107,11 +107,12 @@ public class ActivityController {
         }
 
         @PostMapping("/{id}/complete-metrics")
-        @Operation(summary = "Completar frecuencia cardíaca, cadencia y velocidad", description = "Descarta los valores fuera de rango fisiológico (FC 30-240 bpm, cadencia "
-                        + "30-240 spm y velocidad 0-15 m/s) y rellena los huecos interpolando linealmente "
-                        + "entre los puntos válidos vecinos. También ajusta la distancia acumulada "
-                        + "descartando retrocesos y saltos que implicarían más de 15 m/s. No modifica "
-                        + "coordenadas ni altitud y no consulta proveedores externos.")
+        @Operation(summary = "Completar frecuencia cardíaca, cadencia y velocidad", description = "Solo rellena los valores nulos y los claramente atípicos: los que se alejan "
+                        + "mucho de la mediana de sus vecinos o son imposibles (FC o cadencia <= 0, "
+                        + "velocidad < 0 o > 15 m/s). El resto de valores se conserva sin cambios. "
+                        + "La interpolación es lineal entre los puntos válidos vecinos. También ajusta "
+                        + "la distancia acumulada descartando retrocesos y saltos que implicarían más "
+                        + "de 15 m/s. No modifica coordenadas ni altitud y no consulta proveedores externos.")
         @ApiResponses({
                         @ApiResponse(responseCode = "200", description = "Métricas completadas"),
                         @ApiResponse(responseCode = "404", description = "La actividad no existe o no pertenece al usuario", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))

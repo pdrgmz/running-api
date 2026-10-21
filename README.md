@@ -479,14 +479,19 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | Método | Path | Descripción |
 |--------|------|-------------|
 | `GET` | `/` | Listar actividades (paginado) |
-| `GET` | `/elevation-coverage` | Porcentaje de trackpoints con altitud y pendientes |
 | `GET` | `/{id}` | Obtener actividad por ID |
 | `GET` | `/{id}/trackpoints` | Obtener trackpoints (con `?resolution=`) |
 | `POST` | `/{id}/complete-trackpoints` | Completar huecos de telemetría y altitudes 0/nulas |
 | `POST` | `/{id}/complete-metrics` | Completar FC, cadencia y velocidad, y ajustar la distancia |
-| `POST` | `/complete-metrics` | Aplicar el completado de métricas a todas las actividades |
 | `DELETE` | `/{id}` | Eliminar actividad por ID |
 | `DELETE` | `/` | Vaciar toda la base de datos |
+
+### Actividades globales (`/api/v1/global-activities`)
+
+| Método | Path | Descripción |
+|--------|------|-------------|
+| `GET` | `/elevation-coverage` | Porcentaje de trackpoints con altitud y pendientes |
+| `POST` | `/complete-metrics` | Aplicar el completado de métricas a todas las actividades |
 
 #### Completado de trackpoints
 
@@ -515,8 +520,12 @@ cuota del proveedor.
 El cron (`ElevationBackfillService`) se ejecuta cada 15 minutos y:
 
 - Busca actividades con algún trackpoint sin altitud útil y coordenadas GPS válidas.
-- Procesa primero las actividades más antiguas.
-- Envía **solo trackpoints sin altitud**, separados al menos 90 m entre sí.
+- También detecta actividades con **altitud constante sospechosa**: el mismo valor exacto en al
+  menos el 90% de los trackpoints registrados por el dispositivo (con un mínimo de 10 puntos).
+  Esas altitudes se tratan como ausentes para recalcularlas; las ya calculadas por el completado
+  no cuentan, así que una actividad deja de estar pendiente en cuanto se recalcula.
+- Procesa primero las actividades más antiguas, mezclando ambos motivos.
+- Envía **solo trackpoints sin altitud o con altitud plana sospechosa**, separados al menos 90 m entre sí.
 - Interpola el resto entre las coordenadas consultadas y recalcula D+/D- y las estadísticas
   globales del usuario.
 - No extrapola el final de la actividad: si queda tramo pendiente, el siguiente lote continúa
@@ -545,26 +554,32 @@ ejecución y el resto queda para la siguiente.
 
 #### Cobertura de altitudes
 
-`GET /api/v1/activities/elevation-coverage` devuelve el progreso global del usuario autenticado:
+`GET /api/v1/global-activities/elevation-coverage` devuelve el progreso global del usuario autenticado:
 
 ```bash
-curl http://localhost:8080/api/v1/activities/elevation-coverage \
+curl http://localhost:8080/api/v1/global-activities/elevation-coverage \
   -H "Authorization: Bearer <token>"
 ```
 
 ```json
 {
   "totalTrackpoints": 202901,
-  "trackpointsWithElevation": 190480,
-  "trackpointsMissingElevation": 12421,
-  "withElevationPercent": 93.88,
-  "missingElevationPercent": 6.12
+  "trackpointsWithElevation": 187280,
+  "trackpointsMissingElevation": 15621,
+  "trackpointsWithFlatElevation": 3200,
+  "withElevationPercent": 92.3,
+  "missingElevationPercent": 7.7,
+  "flatElevationPercent": 1.58
 }
 ```
 
 Una altitud nula o 0 se considera pendiente, igual que en el cron, salvo que haya sido
-calculada por el completado (por ejemplo, un 0 real devuelto por el modelo digital). Es útil
-para comprobar cómo avanza el backfill sin tener que consultar la base de datos.
+calculada por el completado (por ejemplo, un 0 real devuelto por el modelo digital). También
+se consideran pendientes los trackpoints que comparten una **altitud constante sospechosa**
+(el mismo valor exacto en al menos el 90% de los trackpoints del dispositivo, con un mínimo
+de 10), que se informan aparte en `trackpointsWithFlatElevation`/`flatElevationPercent`.
+Los porcentajes `withElevationPercent` y `missingElevationPercent` ya excluyen esas altitudes.
+Es útil para comprobar cómo avanza el backfill sin tener que consultar la base de datos.
 
 #### API key de Open-Meteo
 
@@ -590,11 +605,13 @@ curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/comple
 
 #### Completado de métricas (FC, cadencia, velocidad y distancia)
 
-`POST /api/v1/activities/{id}/complete-metrics` rellena la frecuencia cardíaca, la cadencia
-y la velocidad, y ajusta la distancia acumulada de una actividad ya almacenada:
+`POST /api/v1/activities/{id}/complete-metrics` rellena únicamente los huecos de frecuencia
+cardíaca, cadencia y velocidad, y ajusta la distancia acumulada de una actividad ya almacenada:
 
-- Antes de interpolar, **detecta y descarta valores fuera de rango**: FC 30–240 bpm,
-  cadencia 30–240 spm y velocidad mayor que 0 y menor o igual a 15 m/s (54 km/h).
+- Solo se reemplazan los valores **nulos**, los **imposibles** (FC o cadencia <= 0,
+  velocidad < 0 o > 15 m/s) y los que se alejan claramente de la mediana de sus vecinos.
+  El resto de valores se conserva sin cambios.
+- La velocidad 0 se considera válida (el corredor está parado) y no se rellena.
 - Cada serie se interpola linealmente entre sus valores válidos vecinos.
 - Los huecos iniciales y finales usan el valor válido más cercano.
 - La velocidad sin datos se deriva de la distancia acumulada y el tiempo.
@@ -623,16 +640,17 @@ curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/comple
   "totalRemoved": 6,
   "distanceAdjusted": 3,
   "distanceDiscardedMeters": 4900.0,
-  "message": "Frecuencia cardíaca, cadencia y velocidad completadas con datos de los puntos vecinos; se descartaron 6 valores fuera de rango; se ajustaron 3 distancias (4900.0 m descartados)"
+  "message": "Frecuencia cardíaca, cadencia y velocidad completadas con datos de los puntos vecinos; se descartaron 6 valores atípicos; se ajustaron 3 distancias (4900.0 m descartados)"
 }
 ```
 
 #### Completado masivo de métricas
 
-`POST /api/v1/activities/complete-metrics` recorre todas las actividades del usuario autenticado
-y aplica el mismo proceso a todos sus trackpoints:
+`POST /api/v1/global-activities/complete-metrics` recorre todas las actividades del usuario
+autenticado y aplica el mismo proceso a todos sus trackpoints:
 
-- Completa FC, cadencia y velocidad y descarta los valores fuera de rango.
+- Solo completa FC, cadencia y velocidad en valores nulos o claramente atípicos; conserva
+  el resto de lecturas.
 - Ajusta la distancia acumulada de los trackpoints.
 - **No modifica** la altitud ni las coordenadas y **no consulta** proveedores externos.
 - Procesa cada actividad en su propia transacción: si una falla, las demás continúan.
@@ -640,7 +658,7 @@ y aplica el mismo proceso a todos sus trackpoints:
 - Devuelve los totales agregados y un mapa `errors` con los IDs de las actividades fallidas.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/activities/complete-metrics \
+curl -X POST http://localhost:8080/api/v1/global-activities/complete-metrics \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -665,7 +683,7 @@ curl -X POST http://localhost:8080/api/v1/activities/complete-metrics \
   "errors": {
     "2026-09-05T07:00:00Z": "datos corruptos"
   },
-  "message": "Actividades procesadas: 41 de 42 (actualizadas: 30, sin cambios: 9, sin trackpoints: 2, fallidas: 1). Se completaron 2700 valores, se descartaron 60 valores fuera de rango, se ajustaron 350 distancias"
+  "message": "Actividades procesadas: 41 de 42 (actualizadas: 30, sin cambios: 9, sin trackpoints: 2, fallidas: 1). Se completaron 2700 valores, se descartaron 60 valores atípicos, se ajustaron 350 distancias"
 }
 ```
 
