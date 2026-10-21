@@ -1,4 +1,6 @@
 {
     "java.compile.nullAnalysis.mode": "automatic",
-    "java.configuration.updateBuildConfiguration": "automatic"
+    "java.configuration.updateBuildConfiguration": "automatic",
+    "java.configuration.maven.userSettings": "${workspaceFolder}/settings.xml",
+    "maven.settingsFile": "${workspaceFolder}/settings.xml"
 }
