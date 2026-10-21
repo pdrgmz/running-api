@@ -182,6 +182,7 @@ src/main/java/com/running/api/
 │   ├── GpxParserService.java
 │   ├── StatsService.java
 │   ├── TcxParserService.java
+│   ├── TrackpointCompletionService.java # Completa huecos de telemetría al importar
 │   ├── ElevationProvider.java           # Puerto de proveedores de elevación
 │   └── OpenMeteoElevationProvider.java  # DEM real vía Open-Meteo
 ├── util/
@@ -509,8 +510,18 @@ cada usuario.
 
 #### Backfill de altitudes
 
-Las importaciones guardan la telemetría tal como viene en el archivo. Un cron
-(`ElevationBackfillService`) se ejecuta cada 15 minutos y:
+La importación individual y masiva completa los huecos de la telemetría antes de guardar la
+actividad:
+
+- **Latitud/longitud**: interpolación lineal entre los puntos GPS válidos vecinos.
+- **FC, cadencia y velocidad**: se descartan las lecturas fuera de rango fisiológico y se
+  interpolan los huecos con los vecinos.
+- **Altitud**: solo se interpola entre altitudes existentes; **no consulta** proveedores externos
+  durante la importación.
+- **Distancia acumulada**: se descartan retrocesos y saltos que implicarían más de 15 m/s.
+
+La altitud que falta (o vale 0) y no se puede interpolar la completa un cron
+(`ElevationBackfillService`) que se ejecuta cada 15 minutos y:
 
 - Busca actividades con algún trackpoint sin altitud útil y coordenadas GPS válidas.
 - También detecta actividades con **altitud constante sospechosa**: el mismo valor exacto en al

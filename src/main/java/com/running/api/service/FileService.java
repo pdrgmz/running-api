@@ -44,6 +44,7 @@ public class FileService {
     private final GlobalSummaryStatsRepository summaryStatsRepository;
     private final StatsService statsService;
     private final BulkUploadStatusTracker bulkUploadStatusTracker;
+    private final TrackpointCompletionService trackpointCompletionService;
     private final PlatformTransactionManager transactionManager;
 
     private final Executor zipExecutor;
@@ -57,6 +58,7 @@ public class FileService {
                        GlobalSummaryStatsRepository summaryStatsRepository,
                        StatsService statsService,
                        BulkUploadStatusTracker bulkUploadStatusTracker,
+                       TrackpointCompletionService trackpointCompletionService,
                        PlatformTransactionManager transactionManager,
                        @Qualifier("zipExecutor") Executor zipExecutor) {
         this.activityRepository = activityRepository;
@@ -68,6 +70,7 @@ public class FileService {
         this.summaryStatsRepository = summaryStatsRepository;
         this.statsService = statsService;
         this.bulkUploadStatusTracker = bulkUploadStatusTracker;
+        this.trackpointCompletionService = trackpointCompletionService;
         this.transactionManager = transactionManager;
         this.zipExecutor = zipExecutor;
     }
@@ -75,6 +78,10 @@ public class FileService {
     @Transactional
     public Activity createActivity(Activity activity) {
         Activity saved = activityRepository.save(activity);
+
+        // La actividad ya está persistida y gestionada por JPA: completamos su telemetría
+        // antes de calcular estadísticas y récords para que estos usen los datos finales.
+        trackpointCompletionService.completeAfterImport(saved);
 
         recalculateAllStats(saved.getUserId());
         statsService.checkAndSetPersonalRecords(saved);
@@ -140,7 +147,12 @@ public class FileService {
         String backupPath = backupStorageService.store(new ByteArrayInputStream(bytes), activity.getId(), fileType);
         activity.setBackupFilePath(backupPath);
 
-        activityRepository.save(activity);
+        Activity saved = activityRepository.save(activity);
+
+        // Se completa después de guardar, dentro de la misma transacción del archivo.
+        // Los cambios se persisten por dirty checking; las estadísticas globales se
+        // recalculan una sola vez al finalizar todo el ZIP.
+        trackpointCompletionService.completeAfterImport(saved);
     }
 
     private Activity parseFile(InputStream is, String fileType) throws Exception {
