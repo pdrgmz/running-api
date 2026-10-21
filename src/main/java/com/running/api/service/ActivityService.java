@@ -8,6 +8,7 @@ import java.util.Optional;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -148,6 +149,7 @@ public class ActivityService {
     }
 
     @Transactional
+    @Async
     public int deleteAllActivities(Long userId) {
         List<Activity> activities = activityRepository.findByUserId(userId);
         int count = activities.size();
