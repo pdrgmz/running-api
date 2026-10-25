@@ -60,6 +60,22 @@ class DistanceSeriesTest {
         assertThat(result).containsExactly(0.0, 100.0, 100.0, 200.0);
     }
 
+    @Test
+    void reconstructPerPointSortsByTimestampAndKeepsOriginalIndexes() {
+        LocalDateTime base = LocalDateTime.of(2026, 1, 1, 8, 0, 0);
+        // Orden invertido/rotado: el último punto aparece primero. Sin ordenar, la reconstrucción
+        // antigua sumaba otra vez los incrementos y devolvía 300 m para una serie de 200 m.
+        List<ActivityTrackpoint> points = List.of(
+                point(200.0, base.plusSeconds(20)),
+                point(0.0, base),
+                point(100.0, base.plusSeconds(10)));
+
+        double[] result = DistanceSeries.reconstructPerPoint(points, MAX_SPEED);
+
+        // El resultado sigue siendo paralelo a la lista original: [200, 0, 100].
+        assertThat(result).containsExactly(200.0, 0.0, 100.0);
+    }
+
     private static ActivityTrackpoint point(Double distance, LocalDateTime timestamp) {
         return ActivityTrackpoint.builder().distanceMeters(distance).timestamp(timestamp).build();
     }

@@ -25,7 +25,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -56,49 +58,92 @@ public class AnalyticsService {
         Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
-        List<ActivityTrackpoint> points = activity.getTrackpoints();
+        List<ActivityTrackpoint> points = new ArrayList<>(activity.getTrackpoints());
+        points.sort(Comparator.comparing(ActivityTrackpoint::getTimestamp,
+                Comparator.nullsLast(Comparator.naturalOrder())));
         List<SplitDto> splits = new ArrayList<>();
 
-        if (points.isEmpty()) return splits;
+        if (points.size() < 2) return splits;
 
         // Distancia saneada por punto: evita que un salto corrupto del dispositivo cree un km fantasma.
+        // La serie se ordena internamente por timestamp aunque la colección JPA llegue desordenada.
         double[] distances = DistanceSeries.reconstructPerPoint(points, RunningMetrics.MAX_PLAUSIBLE_SPEED_MPS);
 
-        int currentKm = 1;
-        double targetMeters = 1000.0;
-        int startIndex = 0;
+        double trackDistance = distances[distances.length - 1] - distances[0];
+        if (trackDistance <= 0) return splits;
 
-        for (int i = 0; i < points.size(); i++) {
-            if (distances[i] >= targetMeters) {
-                splits.add(buildSplitDto(currentKm, points, distances, startIndex, i));
-                currentKm++;
-                targetMeters += 1000.0;
-                startIndex = i;
+        // La distancia del resumen de la actividad es la referencia: si la telemetría se desvía
+        // (sensores que reportan distancias inconsistentes o series incompletas), se normaliza
+        // para que los splits sumen la distancia real de la carrera y no un múltiplo de ella.
+        double activityDistance = activity.getDistanceMeters() != null ? activity.getDistanceMeters() : 0.0;
+        double targetTotal = activityDistance > 0 ? activityDistance : trackDistance;
+        double scale = Math.abs(targetTotal - trackDistance) / targetTotal > 0.02
+                ? targetTotal / trackDistance
+                : 1.0;
+
+        double base = distances[0];
+        for (int i = 0; i < distances.length; i++) {
+            distances[i] = (distances[i] - base) * scale;
+        }
+
+        double totalDistance = distances[distances.length - 1];
+        if (totalDistance <= 0) return splits;
+
+        int km = 1;
+        double previousTarget = 0.0;
+        LocalDateTime segmentStartTime = points.get(0).getTimestamp();
+
+        for (int i = 1; i < points.size(); i++) {
+            double previousDistance = distances[i - 1];
+            double currentDistance = distances[i];
+            if (currentDistance <= previousDistance) continue;
+
+            // Un mismo tramo puede cruzar varios kilómetros (huecos de GPS, muestras espaciadas).
+            while (previousTarget + 1000.0 <= currentDistance) {
+                double target = previousTarget + 1000.0;
+                double fraction = (target - previousDistance) / (currentDistance - previousDistance);
+                LocalDateTime targetTime = interpolateTime(
+                        points.get(i - 1).getTimestamp(), points.get(i).getTimestamp(), fraction);
+
+                splits.add(buildSplitDto(km, 1000.0, segmentStartTime, targetTime,
+                        averageHeartRate(points, distances, previousTarget, target)));
+
+                km++;
+                previousTarget = target;
+                segmentStartTime = targetTime;
             }
         }
 
-        if (startIndex < points.size() - 1) {
-            splits.add(buildSplitDto(currentKm, points, distances, startIndex, points.size() - 1));
+        // Tramo final incompleto (el último km parcial).
+        if (totalDistance - previousTarget > 1.0) {
+            LocalDateTime endTime = points.get(points.size() - 1).getTimestamp();
+            splits.add(buildSplitDto(km, totalDistance - previousTarget, segmentStartTime, endTime,
+                    averageHeartRate(points, distances, previousTarget, totalDistance)));
         }
 
         return splits;
     }
 
-    private SplitDto buildSplitDto(int km, List<ActivityTrackpoint> points, double[] distances, int from, int to) {
-        double distMeters = distances[to] - distances[from];
+    private LocalDateTime interpolateTime(LocalDateTime from, LocalDateTime to, double fraction) {
+        if (from == null) return to;
+        if (to == null) return from;
 
-        ActivityTrackpoint first = points.get(from);
-        ActivityTrackpoint last = points.get(to);
-        long timeSeconds = 0;
-        if (first.getTimestamp() != null && last.getTimestamp() != null) {
-            timeSeconds = Duration.between(first.getTimestamp(), last.getTimestamp()).getSeconds();
-        }
+        long nanos = Duration.between(from, to).toNanos();
+        if (nanos <= 0) return from;
 
-        double avgSpeed = timeSeconds > 0 ? distMeters / timeSeconds : 0.0;
-        double paceMinPerKm = avgSpeed > 0 ? (1000.0 / (avgSpeed * 60.0)) : 0.0;
+        double clamped = Math.max(0.0, Math.min(1.0, fraction));
+        return from.plusNanos(Math.round(nanos * clamped));
+    }
 
-        int sumHr = 0, countHr = 0;
-        for (int i = from; i <= to; i++) {
+    private int averageHeartRate(List<ActivityTrackpoint> points, double[] distances,
+                                 double fromDistance, double toDistance) {
+        int sumHr = 0;
+        int countHr = 0;
+
+        for (int i = 0; i < points.size(); i++) {
+            double distance = distances[i];
+            if (distance < fromDistance || distance > toDistance) continue;
+
             Integer hr = points.get(i).getHeartRate();
             if (hr != null && hr > 0) {
                 sumHr += hr;
@@ -106,12 +151,25 @@ public class AnalyticsService {
             }
         }
 
+        return countHr > 0 ? (sumHr / countHr) : 0;
+    }
+
+    private SplitDto buildSplitDto(int km, double distMeters, LocalDateTime startTime,
+                                   LocalDateTime endTime, int avgHeartRate) {
+        long timeSeconds = 0;
+        if (startTime != null && endTime != null) {
+            timeSeconds = Math.max(0L, Math.round(Duration.between(startTime, endTime).toNanos() / 1_000_000_000.0));
+        }
+
+        double avgSpeed = timeSeconds > 0 ? distMeters / timeSeconds : 0.0;
+        double paceMinPerKm = avgSpeed > 0 ? (1000.0 / (avgSpeed * 60.0)) : 0.0;
+
         return SplitDto.builder()
                 .km(km)
                 .distanceMeters(Math.round(distMeters * 100.0) / 100.0)
                 .timeSeconds(timeSeconds)
                 .paceMinPerKm(String.format("%.2f", paceMinPerKm))
-                .avgHeartRate(countHr > 0 ? (sumHr / countHr) : 0)
+                .avgHeartRate(avgHeartRate)
                 .build();
     }
 

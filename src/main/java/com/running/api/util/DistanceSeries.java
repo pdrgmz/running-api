@@ -4,6 +4,8 @@ import com.running.api.model.ActivityTrackpoint;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -68,16 +70,36 @@ public final class DistanceSeries {
      * Variante para una lista de puntos de telemetría: devuelve una serie paralela a {@code points}
      * (mismos índices). Las muestras sin distancia o sin timestamp conservan el último valor
      * reconstruido; las anteriores a la primera muestra válida toman el valor de ésta.
+     * <p>
+     * La lista puede llegar desordenada (por ejemplo, desde una colección JPA sin {@code ORDER BY});
+     * internamente se ordena por timestamp antes de reconstruir y el resultado se devuelve en el
+     * orden original, de modo que {@code result[i]} sigue correspondiendo a {@code points.get(i)}.
      */
     public static double[] reconstructPerPoint(List<ActivityTrackpoint> points, double maxSpeedMps) {
         int n = points.size();
+        double[] result = new double[n];
+        if (n == 0) {
+            return result;
+        }
+
+        // Orden cronológico defensivo: un trackpoint fuera de orden haría que la reconstrucción
+        // sumara incrementos positivos entre muestras no consecutivas e inflara la distancia.
+        Integer[] chronological = new Integer[n];
+        for (int i = 0; i < n; i++) {
+            chronological[i] = i;
+        }
+        Arrays.sort(chronological, Comparator
+                .comparing((Integer i) -> points.get(i).getTimestamp(),
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparingInt(i -> i));
+
         double[] raw = new double[n];
         double[] time = new double[n];
-        int[] indexOf = new int[n];
+        int[] originalIndex = new int[n];
         int count = 0;
 
         LocalDateTime base = null;
-        for (int i = 0; i < n; i++) {
+        for (int i : chronological) {
             ActivityTrackpoint point = points.get(i);
             if (point.getDistanceMeters() == null || point.getTimestamp() == null) {
                 continue;
@@ -87,17 +109,16 @@ public final class DistanceSeries {
             }
             raw[count] = point.getDistanceMeters();
             time[count] = Duration.between(base, point.getTimestamp()).toNanos() / 1_000_000_000.0;
-            indexOf[count] = i;
+            originalIndex[count] = i;
             count++;
         }
 
         double[] rebuilt = reconstruct(raw, time, count, maxSpeedMps);
 
-        double[] result = new double[n];
         double carried = count > 0 ? rebuilt[0] : 0.0;
         int next = 0;
-        for (int i = 0; i < n; i++) {
-            if (next < count && indexOf[next] == i) {
+        for (int i : chronological) {
+            if (next < count && originalIndex[next] == i) {
                 carried = rebuilt[next];
                 next++;
             }
