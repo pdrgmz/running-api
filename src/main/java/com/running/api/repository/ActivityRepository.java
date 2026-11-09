@@ -36,8 +36,21 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
 
     List<Activity> findByUserIdIsNull();
 
-    @Query("SELECT MAX(a.maxHeartRate) FROM Activity a WHERE a.userId = :userId")
-    Integer findMaxHeartRateByUserId(@Param("userId") Long userId);
+    /**
+     * Picos de FC de todas las sesiones del usuario. Se devuelven todos para poder aplicar
+     * el filtro de outliers de {@code RunningMetrics.robustMaxHeartRate} en vez de confiar
+     * en un único {@code MAX} de SQL, que se dejaría arrastrar por un artefacto puntual.
+     */
+    @Query("SELECT a.maxHeartRate FROM Activity a "
+           + "WHERE a.userId = :userId AND a.maxHeartRate IS NOT NULL")
+    List<Integer> findMaxHeartRatesByUserId(@Param("userId") Long userId);
+
+    @Query("SELECT a.maxHeartRate FROM Activity a "
+           + "WHERE a.userId = :userId AND a.maxHeartRate IS NOT NULL "
+           + "AND a.startTime >= :start AND a.startTime <= :end")
+    List<Integer> findMaxHeartRatesByUserIdBetween(@Param("userId") Long userId,
+                                                   @Param("start") LocalDateTime start,
+                                                   @Param("end") LocalDateTime end);
 
     @Query("SELECT new com.running.api.model.GlobalSummaryStats(" +
            "COUNT(a), " +

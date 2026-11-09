@@ -73,7 +73,7 @@ class AnalyticsServiceTest {
 
         ActivityRepository repository = mock(ActivityRepository.class);
         when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
-        when(repository.findMaxHeartRateByUserId(USER_ID)).thenReturn(200);
+        when(repository.findMaxHeartRatesByUserId(USER_ID)).thenReturn(List.of(200));
 
         HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
 
@@ -95,13 +95,36 @@ class AnalyticsServiceTest {
 
         ActivityRepository repository = mock(ActivityRepository.class);
         when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
-        when(repository.findMaxHeartRateByUserId(USER_ID)).thenReturn(null);
+        when(repository.findMaxHeartRatesByUserId(USER_ID)).thenReturn(List.of());
 
         HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
 
         assertThat(zones.getMaxHrUsed()).isEqualTo(185);
         // 100 / 185 = 54 % -> Z1
         assertThat(zones.getZones().getZ1Recovery().getPercentage()).isEqualTo(100.0);
+    }
+
+    @Test
+    void ignoresAnIsolatedMaxHeartRatePeakWhenResolvingAthleteReference() {
+        // Historial realista: los picos de sesión se mueven entre 176 y 190, con un único
+        // 200 aislado (sobrelectura de un sensor óptico). El cerco de Tukey descarta el 200
+        // y la referencia del atleta queda en 190, no en el pico puntual.
+        Activity activity = Activity.builder()
+                .id(ACTIVITY_ID)
+                .userId(USER_ID)
+                .distanceMeters(5_000.0)
+                .maxHeartRate(200)
+                .trackpoints(buildConstantHeartRateSeries(120, 150))
+                .build();
+
+        ActivityRepository repository = mock(ActivityRepository.class);
+        when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
+        when(repository.findMaxHeartRatesByUserId(USER_ID))
+                .thenReturn(List.of(176, 178, 179, 180, 181, 182, 183, 184, 185, 186, 190));
+
+        HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
+
+        assertThat(zones.getMaxHrUsed()).isEqualTo(190);
     }
 
     private AnalyticsService serviceWithActivity(double distanceMeters, List<ActivityTrackpoint> points) {

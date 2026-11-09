@@ -67,7 +67,12 @@ public class StatsService {
         double totalTime = stats.getTotalTimeSeconds();
         double totalElevation = stats.getTotalElevationGain();
         long totalCalories = stats.getTotalCalories();
-        int maxHrGlobal = stats.getMaxHeartRateGlobal();
+        // El resumen usa el mismo filtro de picos que la referencia del atleta: un único
+        // artefacto no debe aparecer como FC máxima del historial ni del periodo consultado.
+        int maxHrGlobal = resolveMaxHeartRateGlobal(userId, range);
+        if (maxHrGlobal <= 0) {
+            maxHrGlobal = stats.getMaxHeartRateGlobal();
+        }
 
         long hours = (long) totalTime / 3600;
         long minutes = ((long) totalTime % 3600) / 60;
@@ -84,6 +89,18 @@ public class StatsService {
                 .avgDistanceKm(totalActivities > 0 ? Math.round((totalDistance / 1000.0 / totalActivities) * 100.0) / 100.0 : 0.0)
                 .maxHeartRateGlobal(maxHrGlobal)
                 .build();
+    }
+
+    /**
+     * FC máxima del periodo (o de todo el historial) aplicando el filtro de picos aislados.
+     * Sin filtro, un único 200 bpm de un sensor óptico eclipsaría el máximo real del resto
+     * de sesiones. Se devuelve {@code 0} si no hay valores válidos.
+     */
+    private int resolveMaxHeartRateGlobal(Long userId, LocalDateTime[] range) {
+        List<Integer> maxima = range != null
+                ? activityRepository.findMaxHeartRatesByUserIdBetween(userId, range[0], range[1])
+                : activityRepository.findMaxHeartRatesByUserId(userId);
+        return RunningMetrics.robustMaxHeartRate(maxima);
     }
 
     private LocalDateTime[] resolveDateRange(String period, Integer year) {
@@ -275,6 +292,12 @@ public class StatsService {
         }
         initialStats.setUserId(userId);
 
+        int robustMaxHr = RunningMetrics.robustMaxHeartRate(
+                activityRepository.findMaxHeartRatesByUserId(userId));
+        if (robustMaxHr > 0) {
+            initialStats.setMaxHeartRateGlobal(robustMaxHr);
+        }
+
         return summaryStatsRepository.save(initialStats);
     }
 
@@ -386,6 +409,11 @@ public class StatsService {
             newStats = new GlobalSummaryStats(0L, 0.0, 0.0, 0.0, 0L, 0);
         }
         newStats.setUserId(userId);
+        int robustMaxHr = RunningMetrics.robustMaxHeartRate(
+                activityRepository.findMaxHeartRatesByUserId(userId));
+        if (robustMaxHr > 0) {
+            newStats.setMaxHeartRateGlobal(robustMaxHr);
+        }
         // Reutiliza la fila existente: dentro de una misma transacción Hibernate ejecuta los
         // INSERT antes que los DELETE diferidos, así que borrar y reinsertar choca con la
         // restricción única de user_id.

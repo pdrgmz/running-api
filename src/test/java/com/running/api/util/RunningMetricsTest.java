@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 
@@ -77,6 +79,32 @@ class RunningMetricsTest {
         assertThat(RunningMetrics.isPlausibleHeartRate(29)).isFalse();
         assertThat(RunningMetrics.isPlausibleHeartRate(241)).isFalse();
         assertThat(RunningMetrics.isPlausibleHeartRate(null)).isFalse();
+    }
+
+    @Test
+    void robustMaxHeartRateIgnoresAnIsolatedOutlier() {
+        // Un único 200 bpm entre picos de sesión de 176-190: el cerco de Tukey lo descarta.
+        List<Integer> sessionMaxima = List.of(176, 178, 179, 180, 181, 182, 183, 184, 185, 186, 190, 200);
+
+        assertThat(RunningMetrics.robustMaxHeartRate(sessionMaxima)).isEqualTo(190);
+    }
+
+    @Test
+    void robustMaxHeartRateKeepsTheAbsoluteMaxWithFewSessions() {
+        // Con pocas sesiones no hay evidencia para calificar el pico como atípico.
+        assertThat(RunningMetrics.robustMaxHeartRate(List.of(180, 185, 192, 200))).isEqualTo(200);
+    }
+
+    @Test
+    void robustMaxHeartRateDiscardsImplausibleValues() {
+        assertThat(RunningMetrics.robustMaxHeartRate(List.of(0, 50, 250, 300))).isZero();
+        assertThat(RunningMetrics.robustMaxHeartRate(List.of(180, 250))).isEqualTo(180);
+    }
+
+    @Test
+    void robustMaxHeartRateHandlesEmptyInput() {
+        assertThat(RunningMetrics.robustMaxHeartRate(null)).isZero();
+        assertThat(RunningMetrics.robustMaxHeartRate(List.of())).isZero();
     }
 
     @Test

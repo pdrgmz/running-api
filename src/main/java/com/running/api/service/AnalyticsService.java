@@ -48,8 +48,6 @@ public class AnalyticsService {
     private static final int PMC_WARMUP_DAYS = 120;
     private static final double VO2MAX_RECREATIONAL_THRESHOLD = 42.0;
     private static final int FALLBACK_MAX_HR = 185;
-    private static final int MIN_PLAUSIBLE_MAX_HR = 120;
-    private static final int MAX_PLAUSIBLE_MAX_HR = 230;
 
     private final ActivityRepository activityRepository;
 
@@ -225,28 +223,31 @@ public class AnalyticsService {
      * del atleta, no contra el pico de cada sesión: usar el máximo de la actividad comprime
      * todas las muestras hacia las zonas altas y hace que un rodaje suave parezca Z4/Z5.
      *
-     * <p>Se toma el mayor valor plausible registrado en las actividades del usuario, más el
-     * pico de la actividad en curso cuando todavía no está persistida. Si no hay ningún dato
-     * válido se usa la propiedad {@code app.user.max-hr}.
+     * <p>Se parte de los picos plausibles de todas las sesiones del atleta, más el pico de la
+     * actividad en curso cuando todavía no está persistida. Sobre esa serie se aplica
+     * {@link RunningMetrics#robustMaxHeartRate(java.util.Collection)}: un pico aislado (por
+     * ejemplo, una sobrelectura óptica de 200 bpm cuando el resto ronda 190) no se convierte
+     * en la referencia de todo el historial. Si no hay ningún dato válido se usa la propiedad
+     * {@code app.user.max-hr}.
      *
      * @param userId    propietario de las actividades (puede ser {@code null} en cálculos aislados)
      * @param activityMaxHr pico de la actividad que se está analizando (opcional)
      * @return FC máxima de referencia en bpm, siempre dentro de un rango fisiológico plausible
      */
     public int resolveAthleteMaxHr(Long userId, Integer activityMaxHr) {
-        int best = 0;
-        Integer observed = userId != null ? activityRepository.findMaxHeartRateByUserId(userId) : null;
-        if (isPlausibleMaxHr(observed)) {
-            best = observed;
+        List<Integer> sessionMaxima = new ArrayList<>();
+        if (userId != null) {
+            List<Integer> stored = activityRepository.findMaxHeartRatesByUserId(userId);
+            if (stored != null) {
+                sessionMaxima.addAll(stored);
+            }
         }
-        if (isPlausibleMaxHr(activityMaxHr) && activityMaxHr > best) {
-            best = activityMaxHr;
+        if (activityMaxHr != null) {
+            sessionMaxima.add(activityMaxHr);
         }
-        return best > 0 ? best : configuredMaxHr();
-    }
 
-    private boolean isPlausibleMaxHr(Integer hr) {
-        return hr != null && hr >= MIN_PLAUSIBLE_MAX_HR && hr <= MAX_PLAUSIBLE_MAX_HR;
+        int best = RunningMetrics.robustMaxHeartRate(sessionMaxima);
+        return best > 0 ? best : configuredMaxHr();
     }
 
     private int configuredMaxHr() {

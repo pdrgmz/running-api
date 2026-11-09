@@ -1,5 +1,6 @@
 package com.running.api.service;
 
+import com.running.api.dto.SummaryStatsDto;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.ActivityRepository;
@@ -178,6 +179,31 @@ class StatsServiceTest {
         assertThat(stats.getValue().getUserId()).isEqualTo(5L);
         assertThat(stats.getValue().getTotalActivities()).isEqualTo(3L);
         assertThat(stats.getValue().getTotalDistanceMeters()).isEqualTo(12000.0);
+    }
+
+    @Test
+    void summaryIgnoresAnIsolatedMaxHeartRatePeak() {
+        // El resumen cacheado dice 200, pero un 200 aislado entre picos de 176-190 es un
+        // artefacto: la FC máxima mostrada debe ser el mayor valor no atípico (190).
+        ActivityRepository activityRepository = mock(ActivityRepository.class);
+        GlobalSummaryStatsRepository summaryStatsRepository = mock(GlobalSummaryStatsRepository.class);
+        StatsService statsService = new StatsService(
+                activityRepository, mock(ActivityTrackpointRepository.class), summaryStatsRepository,
+                mock(PersonalRecordRepository.class));
+
+        when(summaryStatsRepository.findByUserId(5L)).thenReturn(Optional.of(
+                GlobalSummaryStats.builder()
+                        .userId(5L)
+                        .totalActivities(3L)
+                        .totalDistanceMeters(12000.0)
+                        .maxHeartRateGlobal(200)
+                        .build()));
+        when(activityRepository.findMaxHeartRatesByUserId(5L))
+                .thenReturn(List.of(176, 178, 179, 180, 181, 182, 183, 184, 185, 186, 190, 200));
+
+        SummaryStatsDto summary = statsService.getSummary(5L, null, null);
+
+        assertThat(summary.getMaxHeartRateGlobal()).isEqualTo(190);
     }
 
     /**

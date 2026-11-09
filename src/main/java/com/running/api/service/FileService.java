@@ -5,6 +5,7 @@ import com.running.api.model.Activity;
 import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.GlobalSummaryStatsRepository;
+import com.running.api.util.RunningMetrics;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -95,6 +96,12 @@ public class FileService {
             newStats = new GlobalSummaryStats(0L, 0.0, 0.0, 0.0, 0L, 0);
         }
         newStats.setUserId(userId);
+        // Mismo filtro de picos que usa la referencia del atleta (ver RunningMetrics).
+        int robustMaxHr = RunningMetrics.robustMaxHeartRate(
+                activityRepository.findMaxHeartRatesByUserId(userId));
+        if (robustMaxHr > 0) {
+            newStats.setMaxHeartRateGlobal(robustMaxHr);
+        }
         final GlobalSummaryStats stats = newStats;
         summaryStatsRepository.findByUserId(userId).ifPresent(existing -> stats.setId(existing.getId()));
         summaryStatsRepository.save(stats);
