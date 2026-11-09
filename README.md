@@ -79,6 +79,19 @@
 - **Número de Eddington** — Métrica de consistencia de carreras
 - **ACWR** — Acute:Chronic Workload Ratio 7:28 con evaluación de riesgo de lesión
 
+### Planes de Entrenamiento con IA
+- **Generación semanal automática** mediante cron, o manual bajo demanda desde la API
+- **n8n agnóstico al usuario**: la API firma un JWT efímero (`aud=mcp`) y lo entrega al webhook
+- **Contexto del atleta por MCP** (`get_training_context`): resumen, ACWR, últimas 4 semanas,
+  actividades recientes, marcas personales y plan actual
+- **La API es la fuente de verdad**: valida y persiste el plan (`save_weekly_plan`) antes de que exista
+- **Reglas de seguridad de carga**: el volumen semanal no puede superar en más de un 25 % la media
+  de las últimas 4 semanas
+- **Preferencias por atleta**: activación, zona horaria, días por semana, día de tirada larga y notas
+- **Versionado e idempotencia**: regenerar archiva el plan anterior; los reintentos de n8n devuelven
+  el mismo plan sin duplicarlo
+- Workflow de n8n listo para importar en [`docs/n8n/weekly-training-plan.json`](docs/n8n/weekly-training-plan.json)
+
 ### Exportación Geoespacial
 - **GeoJSON** — FeatureCollection con la ruta GPS
 - **GPX 1.1** — Exportación estandarizada con descarga de archivo
@@ -101,7 +114,8 @@ src/main/java/com/running/api/
 │   ├── AuthController.java      # Registro, login, refresh y /me
 │   ├── FilesController.java     # Importación/exportación TCX/GPX/FIT
 │   ├── GeoController.java       # Exportación GeoJSON/GPX
-│   └── StatsController.java     # Estadísticas y récords
+│   ├── StatsController.java     # Estadísticas y récords
+│   └── TrainingPlanController.java # Planes semanales, jobs y preferencias
 ├── dto/
 │   ├── AcwrStatusDto.java
 │   ├── ApiKeyCreatedResponseDto.java  # Clave recién creada (valor visible una sola vez)
@@ -132,26 +146,46 @@ src/main/java/com/running/api/
 │   ├── TrainingLoadResponseDto.java
 │   ├── UserResponseDto.java     # Datos públicos del usuario
 │   ├── Vo2MaxVamResponseDto.java
-│   └── WeekdayStatsDto.java
+│   ├── WeekdayStatsDto.java
+│   ├── TrainingPlanResponseDto.java / TrainingPlanSummaryDto.java
+│   ├── TrainingPreferencesDto.java / UpdateTrainingPreferencesRequestDto.java
+│   ├── GenerateTrainingPlanRequestDto.java / GenerateTrainingPlanResponseDto.java
+│   ├── PlanGenerationJobResponseDto.java / PlanViolationDto.java
+│   ├── TrainingContextDto.java  # Contexto enviado al LLM vía MCP
+│   └── WeeklyPlanPayload.java   # Contrato JSON de save_weekly_plan
 ├── exception/
 │   ├── DuplicateEmailException.java
+│   ├── ForbiddenOperationException.java
 │   ├── GlobalExceptionHandler.java
 │   ├── InvalidCredentialsException.java
-│   └── ResourceNotFoundException.java
+│   ├── ResourceNotFoundException.java
+│   ├── PlanValidationException.java
+│   ├── PlanAlreadyExistsException.java
+│   ├── PlanJobStateException.java
+│   ├── PlanGenerationException.java
+│   └── PlanGenerationNotConfiguredException.java
 ├── mapper/
 │   └── ActivityMapper.java      # Mapeo FitActivityDTO -> Activity
 ├── mcp/
 │   ├── McpServerController.java # Servidor MCP (JSON-RPC)
+│   ├── McpToolResult.java       # Resultado con isError para el agente
 │   └── tools/
 │       ├── ActivityTools.java
 │       ├── AnalyticsTools.java
-│       └── StatsTools.java
+│       ├── StatsTools.java
+│       └── TrainingTools.java   # Contexto, guardado de plan y fallo de job
 ├── model/
 │   ├── Activity.java            # Entidad principal de carrera
 │   ├── ActivityTrackpoint.java  # Puntos de telemetría segundo a segundo
 │   ├── ApiKey.java              # Clave de API (hash SHA-256, caducidad y último uso)
 │   ├── GlobalSummaryStats.java  # Estadísticas globales acumuladas (por usuario)
 │   ├── PersonalRecord.java      # Récords personales por distancia (por usuario)
+│   ├── TrainingPlan.java        # Plan semanal validado y versionado
+│   ├── PlannedWorkout.java      # Sesión de un plan (fecha, tipo, objetivos)
+│   ├── TrainingPreferences.java # Activación, zona horaria y preferencias
+│   ├── PlanGenerationJob.java   # Job de generación (requestId, estado, plan)
+│   ├── PlanStatus.java / WorkoutType.java / WorkoutStatus.java
+│   ├── TrainingJobStatus.java / TrainingJobSource.java
 │   └── User.java                # Usuario (email + hash de contraseña + rol)
 ├── repository/
 │   ├── ActivityRepository.java
@@ -159,6 +193,10 @@ src/main/java/com/running/api/
 │   ├── ApiKeyRepository.java
 │   ├── GlobalSummaryStatsRepository.java
 │   ├── PersonalRecordRepository.java
+│   ├── TrainingPlanRepository.java
+│   ├── PlannedWorkoutRepository.java
+│   ├── TrainingPreferencesRepository.java
+│   ├── PlanGenerationJobRepository.java
 │   ├── UserRepository.java
 │   └── projection/
 │       └── DailyTrimpProjection.java
@@ -168,7 +206,7 @@ src/main/java/com/running/api/
 │   ├── JwtAuthenticationFilter.java  # Valida el Bearer token en cada petición
 │   ├── JwtService.java               # Emisión/validación de tokens JWT
 │   ├── SecurityConfig.java           # Cadena de filtros, rutas públicas y 401/403 JSON
-│   └── UserPrincipal.java            # Principal autenticado (id, email, rol)
+│   └── UserPrincipal.java            # Principal autenticado (id, email, rol, scopes, aud, requestId)
 ├── service/
 │   ├── ActivityService.java
 │   ├── AnalyticsService.java
@@ -181,6 +219,11 @@ src/main/java/com/running/api/
 │   ├── GeoService.java
 │   ├── GpxParserService.java
 │   ├── StatsService.java
+│   ├── TrainingPlanService.java         # Validación, persistencia, versiones y jobs
+│   ├── TrainingContextService.java      # Contexto del atleta para el LLM
+│   ├── TrainingPlanGenerationService.java # Job + JWT efímero + webhook n8n
+│   ├── TrainingPlanScheduler.java       # Cron semanal y reconciliación de jobs
+│   ├── N8nPlanWebhookClient.java        # Cliente HTTP del webhook de n8n
 │   ├── TcxParserService.java
 │   ├── TrackpointCompletionService.java # Completa huecos de telemetría al importar
 │   ├── ElevationProvider.java           # Puerto de proveedores de elevación
@@ -190,6 +233,7 @@ src/main/java/com/running/api/
 │   ├── ElevationAccumulator.java # Desnivel D+/D- con histéresis (filtro de ruido GPS)
 │   ├── GeoUtils.java             # Distancia Haversine
 │   ├── RunningMetrics.java       # TRIMP / VAM / VO2Max / detección de deporte
+│   ├── TrainingWeekUtils.java    # Semanas ISO (lunes) y zonas horarias
 │   └── SeriesInterpolation.java  # Relleno lineal de series con huecos
 └── RunningApiApplication.java
 ```
@@ -229,6 +273,15 @@ src/main/java/com/running/api/
 | `APP_JWT_REFRESH_EXPIRATION_MINUTES` | `10080` | Vigencia del refresh token en minutos (7 días) |
 | `APP_ADMIN_EMAIL` | `admin@running.local` | Email del usuario administrador sembrado al arrancar |
 | `APP_ADMIN_PASSWORD` | `Admin1234!` | Contraseña inicial del administrador (solo se aplica al crearlo) |
+| `APP_TRAINING_PLAN_ENABLED` | `false` | Activa el cron semanal (la generación manual funciona igualmente) |
+| `APP_TRAINING_PLAN_CRON` | `0 0 18 * * SUN` | Cron de generación semanal (hora del servidor) |
+| `APP_TRAINING_PLAN_N8N_WEBHOOK_URL` | *(vacío)* | URL del webhook de n8n. Sin ella, `POST /plans/generate` responde `503` |
+| `APP_TRAINING_PLAN_MCP_URL` | `http://localhost:8080/mcp` | URL del MCP que n8n usará (se envía en el body del webhook) |
+| `APP_TRAINING_PLAN_TOKEN_TTL_MINUTES` | `45` | Vigencia del JWT efímero entregado a n8n |
+| `APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES` | `60` | Tras este tiempo, un job `PENDING`/`RUNNING` pasa a `TIMEOUT` |
+| `APP_TRAINING_PLAN_RECONCILE_CRON` | `0 */10 * * * *` | Cron de reconciliación de jobs caducados |
+| `APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS` | `20` | Timeout de la llamada de la API al webhook (no espera al LLM) |
+| `APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT` | `25` | Incremento máximo del volumen semanal sobre la media de 4 semanas |
 
 ### Archivo `application.yml`
 
@@ -281,6 +334,17 @@ app:
     refresh-expiration-minutes: ${APP_JWT_REFRESH_EXPIRATION_MINUTES:10080}
     admin-email: ${APP_ADMIN_EMAIL:admin@running.local}
     admin-password: ${APP_ADMIN_PASSWORD:Admin1234!}
+  training:
+    plan:
+      enabled: ${APP_TRAINING_PLAN_ENABLED:false}
+      cron: ${APP_TRAINING_PLAN_CRON:0 0 18 * * SUN}
+      n8n-webhook-url: ${APP_TRAINING_PLAN_N8N_WEBHOOK_URL:}
+      mcp-url: ${APP_TRAINING_PLAN_MCP_URL:http://localhost:8080/mcp}
+      token-ttl-minutes: ${APP_TRAINING_PLAN_TOKEN_TTL_MINUTES:45}
+      job-timeout-minutes: ${APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES:60}
+      reconcile-cron: ${APP_TRAINING_PLAN_RECONCILE_CRON:0 */10 * * * *}
+      webhook-timeout-seconds: ${APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS:20}
+      max-weekly-increase-percent: ${APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT:25}
 ```
 
 ---
@@ -377,9 +441,15 @@ curl http://localhost:8080/api/v1/auth/me -H "Authorization: Bearer <token>"
 |------|--------------|----------------------|-----|
 | **Acceso** | `ACCESS` | 24 h (`APP_JWT_EXPIRATION_MINUTES`) | Cabecera `Authorization: Bearer` |
 | **Refresco** | `REFRESH` | 7 días (`APP_JWT_REFRESH_EXPIRATION_MINUTES`) | Solo en `POST /api/v1/auth/refresh` |
+| **Generación de plan** | `PLAN_GENERATION` | 45 min (`APP_TRAINING_PLAN_TOKEN_TTL_MINUTES`) | Solo en `/mcp`, `aud=mcp`, scopes `training:read training:write` |
 
 Un refresh token **no** sirve como token de acceso ni viceversa. El refresh no requiere
 cabecera `Authorization`: se autentica con el propio refresh token.
+
+El token de generación de plan es **efímero y de mínimo privilegio**: lo emite la API para un job
+concreto, viaja como `Authorization` hacia n8n y solo se acepta en `/mcp`. Incluye un claim
+`requestId` que la API usa para correlacionar el guardado; n8n nunca recibe credenciales
+permanentes ni el `userId`.
 
 ### Claves de API (automatizaciones)
 
@@ -628,15 +698,144 @@ contrato; el resto de límites (horario, diario y mensual) sigue aplicando.
 | `GET` | `/{id}/geojson` | Exportar ruta en GeoJSON |
 | `GET` | `/{id}/gpx` | Exportar ruta en GPX 1.1 |
 
+### Entrenamientos (`/api/v1/training`)
+
+| Método | Path | Descripción |
+|--------|------|-------------|
+| `GET` | `/plans/current` | Plan activo de la semana actual (o el último activo); `204` si no hay ninguno |
+| `GET` | `/plans` | Listar planes, con filtro opcional `?from=` y `?to=` (lunes) |
+| `GET` | `/plans/{id}` | Obtener un plan concreto con sus sesiones |
+| `GET` | `/plans/week/{weekStart}` | Plan de una semana (la versión más reciente) |
+| `POST` | `/plans/generate` | Encolar la generación de un plan (`202`). Body opcional: `weekStart`, `replace` |
+| `GET` | `/generation-jobs` | Últimos jobs de generación del usuario |
+| `GET` | `/generation-jobs/{requestId}` | Estado de un job (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT`) |
+| `GET` | `/preferences` | Preferencias de planificación (`configured=false` si no hay fila) |
+| `PUT` | `/preferences` | Activar generación automática, zona horaria, días/semana, tirada larga y notas |
+
+#### Generación de un plan
+
+```bash
+# Encolar la próxima semana (por defecto, el próximo lunes en la zona del atleta)
+curl -X POST http://localhost:8080/api/v1/training/plans/generate \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Regenerar una semana concreta archivando la versión anterior
+curl -X POST http://localhost:8080/api/v1/training/plans/generate \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"weekStart":"2026-11-16","replace":true}'
+
+# Consultar el job y, cuando termine, el plan resultante
+curl http://localhost:8080/api/v1/training/generation-jobs/<requestId> \
+  -H "Authorization: Bearer <token>"
+curl http://localhost:8080/api/v1/training/plans/current \
+  -H "Authorization: Bearer <token>"
+```
+
+Flujo interno:
+
+1. `POST /plans/generate` crea un `PlanGenerationJob` (`PENDING`) y responde `202`.
+2. La API firma un JWT efímero (`aud=mcp`, `training:read training:write`, `requestId`) y llama al
+   webhook de n8n con `{requestId, weekStart, replace, mcpUrl}`.
+3. El **AI Agent** de n8n llama a `get_training_context` a través del **MCP Client Tool** (usando el
+   JWT del job), genera el plan y n8n lo envía a `save_weekly_plan`.
+4. La API valida el plan, lo persiste y marca el job `COMPLETED` en la misma transacción.
+5. Si n8n no puede terminar, llama a `fail_generation_job`; si nunca responde, el cron de
+   reconciliación lo marca `TIMEOUT`.
+
+Reglas destacadas:
+
+- `weekStart` debe ser **lunes** y coincidir con la semana del job.
+- Sin `replace=true`, un plan ya existente devuelve `409 PLAN_EXISTS`.
+- Un plan válido no puede superar en más de `APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT`
+  (25 % por defecto) la media de las últimas 4 semanas.
+- Los días de descanso se representan **omitiendo la sesión** (no se admite el tipo `REST`).
+- Los reintentos con el mismo `requestId` son idempotentes: devuelven el plan ya guardado.
+
+#### Preferencias
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/training/preferences \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "timezone": "Europe/Madrid",
+    "daysPerWeek": 5,
+    "preferredLongRunDay": "SATURDAY",
+    "notes": "Prefiero entrenar por la mañana"
+  }'
+```
+
+Sin fila de preferencias **no se genera ningún plan automático**: el cron solo procesa usuarios con
+`enabled=true`. La generación manual sigue funcionando aunque `APP_TRAINING_PLAN_ENABLED=false`,
+siempre que el webhook de n8n esté configurado.
+
+### Workflow de n8n
+
+El workflow listo para importar está en
+[`docs/n8n/weekly-training-plan.json`](docs/n8n/weekly-training-plan.json). Es **agnóstico al
+usuario**: recibe el JWT en `Authorization`, lee `mcpUrl` del body y usa ese mismo token para las
+llamadas MCP.
+
+Arquitectura:
+
+- **AI Agent** de n8n con un **OpenAI Chat Model**.
+- **MCP Client Tool** conectado al agente, autenticado con el JWT efímero del job. El nodo no admite
+  credenciales dinámicas por ejecución, así que el token viaja como query param
+  `access_token` **solo en `/mcp`** (la API no lo acepta en rutas REST).
+- El agente llama a `get_training_context`, genera el JSON del plan y n8n lo envía de forma
+  determinista a `save_weekly_plan` con el mismo JWT.
+
+Nodos principales:
+
+1. **Webhook API** — `POST /webhook/training-plan-generate`, responde de inmediato (`onReceived`).
+2. **Preparar llamadas MCP** — extrae el token, `requestId`, `weekStart`, `mcpUrl` y construye el
+   endpoint del MCP con `access_token`.
+3. **AI Agent · plan** — recibe el `weekStart` y las instrucciones del plan.
+4. **MCP Client Tool** — expone `get_training_context` al agente con el JWT del job.
+5. **OpenAI Chat Model** — genera el plan; `gpt-4.1-mini` por defecto.
+6. **Extraer plan JSON** — limpia la respuesta del agente y la convierte en `planJson`.
+7. **MCP · guardar plan** — `tools/call` → `save_weekly_plan` con `planJson` como string.
+8. **Telegram · plan** — envía el plan guardado.
+9. **Rama de error** — `fail_generation_job` + aviso por Telegram.
+
+Requisitos tras importar:
+
+| Elemento | Obligatorio | Descripción |
+|----------|-------------|-------------|
+| Credencial **OpenAI** | ✅ | Selecciónala en el nodo `OpenAI Chat Model`. Puede apuntar a cualquier API compatible con OpenAI |
+| `TELEGRAM_CHAT_ID` | ✅ | Chat de destino de los mensajes |
+| Credencial **Telegram** | ✅ | Selecciónala en los dos nodos de Telegram |
+| `RUNNING_API_MCP_URL` | ❌ | Fallback si el body del webhook no incluye `mcpUrl` |
+
+El modelo se configura en el nodo `OpenAI Chat Model` (`gpt-4.1-mini` por defecto). La URL del
+webhook de n8n debe configurarse en `APP_TRAINING_PLAN_N8N_WEBHOOK_URL`, por ejemplo
+`https://n8n.example.com/webhook/training-plan-generate`.
+
+> El token efímero viaja en la URL del MCP Client Tool. Es un token de corta duración, con
+> `aud=mcp`, scopes de entrenamiento y ligado a un `requestId`; aun así, evita registrar las URLs
+> completas en proxies o balanceadores. Si tu versión de n8n permite credenciales dinámicas,
+> usa la cabecera `Authorization` en lugar del query param.
+
+> Los cron de generación y reconciliación están pensados para **una sola instancia** de la API.
+> Si despliegas varias réplicas, activa la generación solo en una o usa un lock distribuido.
+> Las tablas nuevas (`training_plans`, `planned_workouts`, `training_preferences`,
+> `plan_generation_jobs`) se crean con `ddl-auto: update`; este proyecto no usa Flyway.
+
 ### MCP (`/mcp`)
 
 | Método | Path | Descripción |
 |--------|------|-------------|
-| `POST` | `/mcp` | Endpoint principal MCP (JSON-RPC 2.0). Requiere `Authorization: Bearer <token>` |
+| `POST` | `/mcp` | Endpoint principal MCP (JSON-RPC 2.0). Requiere `Authorization: Bearer <token>` o `?access_token=<token>` |
 | `GET` | `/mcp` | Endpoint SSE (requiere cabecera `Mcp-Session-Id` y `Authorization: Bearer <token>`) |
 
 > El servidor MCP se autentica con el **mismo JWT** que la API REST. Las herramientas MCP
-> operan sobre las actividades del usuario dueño del token.
+> operan sobre las actividades del usuario dueño del token. Desde la versión 1.5.0 incluye
+> `get_training_context`, `save_weekly_plan` y `fail_generation_job`; `tools/list` y `tools/call`
+> son *stateless* (no requieren `Mcp-Session-Id`), pensados para ser llamados desde n8n.
 
 ---
 
@@ -719,6 +918,68 @@ Estadísticas globales acumuladas. Una fila por usuario (`user_id` único).
 | `totalElevationGain` | Double | Desnivel positivo total (m) |
 | `totalCalories` | Long | Calorías totales |
 | `maxHeartRateGlobal` | Integer | FC máxima histórica |
+
+### TrainingPlan
+Plan semanal generado por IA y validado por la API. Único por `user_id`, `week_start` y `version`;
+`request_id` identifica el job que lo produjo. Al regenerar, la versión anterior pasa a `ARCHIVED`.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | String | ID único (UUID) |
+| `userId` | Long | Propietario |
+| `weekStart` / `weekEnd` | LocalDate | Lunes y domingo de la semana |
+| `status` | PlanStatus | `ACTIVE`, `ARCHIVED`, `COMPLETED` |
+| `version` | Integer | Versión para esa semana |
+| `requestId` | String | Job de generación que lo produjo |
+| `summary` / `coachNotes` | String | Resumen y notas del entrenador/IA |
+| `targetWeeklyDistanceMeters` / `targetWeeklyLoad` | Double | Objetivos semanales |
+| `model` / `promptVersion` | String | Trazabilidad del LLM |
+| `generatedAt` | LocalDateTime | Momento de generación |
+| `workouts` | List | Sesiones (`PlannedWorkout`) |
+
+### PlannedWorkout
+Sesión de un plan. Única por `plan_id` y `workout_date`.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | Long | ID autoincremental |
+| `workoutDate` | LocalDate | Fecha de la sesión |
+| `type` | WorkoutType | `EASY`, `RECOVERY`, `LONG_RUN`, `TEMPO`, `INTERVALS`, `HILLS`, `RACE_PACE`, `RACE`, `CROSS_TRAINING`, `OTHER` |
+| `title` / `description` | String | Título y detalle |
+| `targetDistanceMeters` / `targetDurationSeconds` | Double | Objetivos de distancia y tiempo |
+| `targetPaceMinPerKm` | Double | Ritmo objetivo (min/km) |
+| `targetHrZone` | Integer | Zona de FC (1-5) |
+| `targetLoad` | Double | Carga objetivo |
+| `mainSet` | String | Series, repeticiones y recuperaciones |
+| `status` | WorkoutStatus | `PLANNED`, `COMPLETED`, `SKIPPED` |
+| `completedActivityId`, `rpe`, `feedback` | | Seguimiento posterior |
+
+### TrainingPreferences
+Preferencias del atleta. Una fila por usuario (`user_id` único); sin fila no hay generación
+automática.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `userId` | Long | Propietario (único) |
+| `enabled` | Boolean | Activa el cron semanal |
+| `timezone` | String | Zona IANA (`Europe/Madrid` por defecto) |
+| `daysPerWeek` | Integer | Sesiones deseadas (1-7) |
+| `preferredLongRunDay` | String | Día preferido de tirada larga |
+| `notes` | String | Restricciones para el LLM |
+
+### PlanGenerationJob
+Correlación entre la petición, el JWT efímero y el plan guardado. El `id` es el `requestId`.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | String | `requestId` (UUID) |
+| `userId` / `weekStart` | | Propietario y semana objetivo |
+| `status` | TrainingJobStatus | `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT` |
+| `source` | TrainingJobSource | `SCHEDULED` o `MANUAL` |
+| `attempts` | Integer | Intentos de guardado |
+| `planId` | String | Plan resultante |
+| `lastError` | String | Último error reportado |
+| `createdAt` / `startedAt` / `completedAt` / `expiresAt` | LocalDateTime | Trazabilidad |
 
 ---
 

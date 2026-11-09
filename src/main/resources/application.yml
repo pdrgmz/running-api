@@ -76,6 +76,21 @@ app:
     # Usuario administrador sembrado al arrancar; recibe las actividades históricas sin dueño.
     admin-email: ${APP_ADMIN_EMAIL:admin@running.local}
     admin-password: ${APP_ADMIN_PASSWORD:Admin1234!}
+  training:
+    plan:
+      # Activa el cron semanal. La generación manual funciona aunque esté en false.
+      enabled: ${APP_TRAINING_PLAN_ENABLED:false}
+      # Domingo a las 18:00 (hora del servidor): genera el plan del lunes siguiente.
+      cron: ${APP_TRAINING_PLAN_CRON:0 0 18 * * SUN}
+      # Webhook de n8n que recibe {requestId, weekStart, replace, mcpUrl} y el JWT efímero.
+      n8n-webhook-url: ${APP_TRAINING_PLAN_N8N_WEBHOOK_URL:https://n8n.pdrgmz.uk/webhook/training-plan-generate}
+      # URL del servidor MCP que n8n usará para get_training_context/save_weekly_plan.
+      mcp-url: ${APP_TRAINING_PLAN_MCP_URL:http://localhost:8080/mcp}
+      token-ttl-minutes: ${APP_TRAINING_PLAN_TOKEN_TTL_MINUTES:45}
+      job-timeout-minutes: ${APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES:60}
+      reconcile-cron: ${APP_TRAINING_PLAN_RECONCILE_CRON:0 */10 * * * *}
+      webhook-timeout-seconds: ${APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS:20}
+      max-weekly-increase-percent: ${APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT:25}
 
 springdoc:
   api-docs:

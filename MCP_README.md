@@ -30,6 +30,22 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
   -d '{"email":"runner@example.com","password":"password123"}'
 ```
 
+### Tokens de generación de planes
+
+Además del JWT de acceso y la API key, el servidor acepta un **JWT efímero de generación de plan**
+que emite la propia API para el workflow de n8n:
+
+- `type=PLAN_GENERATION`, `aud=mcp`, `requestId=<job>`
+- Scopes `training:read training:write`
+- Vigencia corta (45 min por defecto)
+- **Solo válido en `/mcp`**: no sirve para llamar a la API REST
+- En `/mcp` se puede enviar como `Authorization: Bearer <token>` o como query param
+  `?access_token=<token>` (necesario para el nodo *MCP Client Tool* de n8n)
+
+Las credenciales históricas (JWT de acceso y `X-Api-Key`) no llevan scopes y conservan el acceso
+completo del usuario. Cuando un token sí lleva scopes, `save_weekly_plan` y `fail_generation_job`
+exigen `training:write`, y `get_training_context` exige `training:read`.
+
 ---
 
 ## ¿Qué es MCP?
@@ -53,6 +69,11 @@ MCP es un protocolo estándar que permite a modelos de lenguaje conectarse a API
 | `get_training_load` | Carga de entrenamiento (TRIMP, HRSS) | `activityId` (string, requerido) |
 | `get_vo2max` | Estimación VO2Max y predicciones de carrera | `activityId` (string, requerido) |
 | `get_acwr_status` | Estado ACWR (riesgo de lesión) | - |
+| `get_training_context` | Contexto completo del atleta para planificar la semana (JSON) | `weekStart` (string, opcional) |
+| `save_weekly_plan` | Valida y guarda el plan semanal generado por el LLM | `weekStart` (string, requerido), `planJson` (string, requerido), `replace` (boolean, opcional), `requestId` (string, opcional) |
+| `fail_generation_job` | Marca el job como `FAILED` cuando no se puede completar | `error` (string, requerido), `requestId` (string, opcional) |
+
+Las tres últimas son las que cierran el ciclo de **generación de planes**; el resto son de consulta.
 
 ---
 
@@ -62,8 +83,11 @@ El servidor implementa el protocolo MCP versión **2024-11-05** con soporte para
 
 - **Transporte**: HTTP con JSON-RPC 2.0
 - **SSE (Server-Sent Events)**: Para streaming de respuestas
-- **Sesiones**: Mediante header `Mcp-Session-Id`
+- **Sesiones**: Mediante header `Mcp-Session-Id` (`initialize` la crea)
+- **Stateless**: `tools/list` y `tools/call` no requieren sesión; basta el token
 - **Notificaciones**: Soporte para `notifications/initialized`
+- **Errores de herramienta**: el resultado incluye `isError` (`true` cuando el agente debe corregir
+  la llamada; no es un error de transporte JSON-RPC)
 
 ---
 
@@ -71,7 +95,7 @@ El servidor implementa el protocolo MCP versión **2024-11-05** con soporte para
 
 | Endpoint | Descripción |
 |----------|-------------|
-| `POST /mcp` | Endpoint principal MCP (JSON-RPC). Requiere `Authorization: Bearer <token>` |
+| `POST /mcp` | Endpoint principal MCP (JSON-RPC). Requiere `Authorization: Bearer <token>` o `?access_token=<token>` |
 | `GET /mcp` | Endpoint SSE (requiere `Mcp-Session-Id` y `Authorization: Bearer <token>`) |
 
 ---
@@ -202,6 +226,144 @@ Reiniciar para que cargue la configuración.
 }
 ```
 
+### Generación de planes
+
+`get_training_context` devuelve un JSON con el resumen del atleta, ACWR, últimas 4 semanas,
+actividades recientes, marcas personales, preferencias y plan actual:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "tools/call",
+  "params": {
+    "name": "get_training_context",
+    "arguments": {
+      "weekStart": "2026-11-16"
+    }
+  }
+}
+```
+
+`save_weekly_plan` recibe el plan como **string JSON** en `planJson` (el esquema de la herramienta es
+plano porque MCP no anida objetos en `arguments` de forma portable):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "tools/call",
+  "params": {
+    "name": "save_weekly_plan",
+    "arguments": {
+      "weekStart": "2026-11-16",
+      "replace": false,
+      "planJson": "{\"summary\":\"Semana de carga moderada\",\"coachNotes\":\"Baja el jueves si el ACWR sube\",\"targetWeeklyDistanceMeters\":24000,\"targetWeeklyLoad\":220,\"workouts\":[{\"date\":\"2026-11-16\",\"type\":\"EASY\",\"title\":\"Rodaje suave\",\"description\":\"Z2\",\"targetDistanceMeters\":8000,\"targetDurationSeconds\":2880,\"targetPaceMinPerKm\":5.4,\"targetHrZone\":2,\"targetLoad\":60},{\"date\":\"2026-11-18\",\"type\":\"TEMPO\",\"title\":\"Tempo\",\"mainSet\":\"3x10' a ritmo umbral\",\"targetDistanceMeters\":10000,\"targetPaceMinPerKm\":4.6,\"targetHrZone\":4}]}"
+    }
+  }
+}
+```
+
+Contrato de `planJson`:
+
+| Campo | Tipo | Obligatorio |
+|-------|------|-------------|
+| `summary` | string | No |
+| `coachNotes` | string | No |
+| `targetWeeklyDistanceMeters` | number | No |
+| `targetWeeklyLoad` | number | No |
+| `model` / `promptVersion` | string | No |
+| `workouts` | array | Sí (al menos 1) |
+| `workouts[].date` | `YYYY-MM-DD` | Sí |
+| `workouts[].type` | enum | Sí |
+| `workouts[].title` | string | Sí |
+| `workouts[].description` | string | No |
+| `workouts[].targetDistanceMeters` | number | No |
+| `workouts[].targetDurationSeconds` | number | No |
+| `workouts[].targetPaceMinPerKm` | number (2-15) | No |
+| `workouts[].targetHrZone` | integer (1-5) | No |
+| `workouts[].targetLoad` | number | No |
+| `workouts[].mainSet` | string | No |
+
+Tipos válidos: `EASY`, `RECOVERY`, `LONG_RUN`, `TEMPO`, `INTERVALS`, `HILLS`, `RACE_PACE`, `RACE`,
+`CROSS_TRAINING`, `OTHER`. `REST` **no** es válido: los días de descanso se omiten.
+
+Respuesta correcta (`isError=false`):
+
+```json
+{
+  "result": {
+    "isError": false,
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ok\":true,\"planId\":\"...\",\"weekStart\":\"2026-11-16\",\"version\":1,\"status\":\"ACTIVE\",\"plan\":{...}}"
+      }
+    ]
+  }
+}
+```
+
+Si el plan incumple las reglas, la respuesta es `isError=true` con las violaciones para que el agente
+corrija y reintente **con el mismo `requestId`**:
+
+```json
+{
+  "result": {
+    "isError": true,
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"ok\":false,\"code\":\"PLAN_INVALID\",\"violations\":[{\"code\":\"WEEKLY_INCREASE_TOO_HIGH\",\"message\":\"...\"}],\"hint\":\"Corrige las violaciones y vuelve a llamar a save_weekly_plan con el mismo requestId.\"}"
+      }
+    ]
+  }
+}
+```
+
+`fail_generation_job` cierra el job cuando n8n no puede terminar:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "tools/call",
+  "params": {
+    "name": "fail_generation_job",
+    "arguments": {
+      "error": "El LLM devolvió un JSON inválido tras 2 intentos"
+    }
+  }
+}
+```
+
+> Con el token de generación, `requestId` sale del JWT. Si además se envía como argumento, debe
+> coincidir; de lo contrario la herramienta devuelve `JOB_CONFLICT`.
+
+### Integración con n8n
+
+El workflow de ejemplo está en [`docs/n8n/weekly-training-plan.json`](docs/n8n/weekly-training-plan.json).
+La API lo llama con un JWT efímero y el body `{requestId, weekStart, replace, mcpUrl}`. El workflow
+usa un **AI Agent** de n8n con un **MCP Client Tool** conectado al servidor:
+
+1. El agente llama a `get_training_context` → contexto del atleta en JSON.
+2. El LLM (OpenAI Chat Model) genera el plan JSON.
+3. n8n envía el JSON a `save_weekly_plan` → validación y persistencia.
+4. `fail_generation_job` (solo en la rama de error).
+
+El nodo **MCP Client Tool** no permite credenciales dinámicas por ejecución, por lo que el token del
+job viaja como query param `access_token` en la URL del MCP:
+
+```
+POST https://tu-api/mcp?access_token=<jwt>
+```
+
+La API acepta este parámetro **solo en `/mcp`**; las rutas REST siguen exigiendo la cabecera
+`Authorization`. Como alternativa puedes usar la cabecera `Authorization: Bearer <token>` con
+`curl` o con un nodo HTTP Request.
+
+No se necesita sesión MCP ni credenciales por usuario dentro de n8n.
+
 ---
 
 ## Desarrollo
@@ -230,11 +392,10 @@ curl -X POST http://localhost:8080/mcp \
     "params": {}
   }'
 
-# MCP tools/list
+# MCP tools/list (stateless: no requiere Mcp-Session-Id)
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
-  -H "Mcp-Session-Id: <session-id>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 2,
@@ -242,11 +403,10 @@ curl -X POST http://localhost:8080/mcp \
     "params": {}
   }'
 
-# MCP tools/call
+# MCP tools/call (stateless)
 curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
-  -H "Mcp-Session-Id: <session-id>" \
   -d '{
     "jsonrpc": "2.0",
     "id": 3,
@@ -265,10 +425,12 @@ curl -X POST http://localhost:8080/mcp \
 ```
 src/main/java/com/running/api/mcp/
 ├── McpServerController.java          # Controlador principal MCP
+├── McpToolResult.java                # Resultado + isError
 └── tools/
     ├── ActivityTools.java            # Herramientas de actividades
     ├── StatsTools.java               # Herramientas de estadísticas
-    └── AnalyticsTools.java           # Herramientas de analíticas
+    ├── AnalyticsTools.java           # Herramientas de analíticas
+    └── TrainingTools.java            # Contexto, guardado de plan y fallo de job
 ```
 
 ---
@@ -276,10 +438,12 @@ src/main/java/com/running/api/mcp/
 ## Notas
 
 - El servidor MCP usa **SSE (Server-Sent Events)** para streaming
-- Todas las herramientas retornan texto formateado para fácil lectura por el LLM
+- Las herramientas de consulta retornan texto formateado; las de planificación retornan JSON
 - El endpoint `/mcp` acepta POST y GET
-- Las herramientas son **solo lectura** (no modifican datos)
-- Se requiere el header `Mcp-Session-Id` después de la inicialización
+- Las herramientas son de lectura **salvo** `save_weekly_plan` y `fail_generation_job`, que escriben
+  el plan y el estado del job del usuario autenticado
+- `tools/list` y `tools/call` son **stateless**: no requieren `Mcp-Session-Id` (solo `initialize` crea sesión)
 - Se requiere `Authorization: Bearer <token>` (JWT) o `X-Api-Key: rk_...` en todas las peticiones
+- Los tokens con scopes exigen `training:read`/`training:write`; los tokens sin scopes conservan acceso completo
 - Las herramientas operan **solo sobre los datos del usuario dueño del token**
 - El protocolo implementado es **2024-11-05**

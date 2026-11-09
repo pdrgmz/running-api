@@ -36,6 +36,41 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
+    @ExceptionHandler(ForbiddenOperationException.class)
+    public ResponseEntity<ErrorResponseDto> handleForbidden(ForbiddenOperationException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.FORBIDDEN, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(PlanValidationException.class)
+    public ResponseEntity<ErrorResponseDto> handlePlanValidation(PlanValidationException ex, HttpServletRequest request) {
+        String detail = ex.getViolations().stream()
+                .map(v -> v.code() + ": " + v.message())
+                .reduce((a, b) -> a + "; " + b)
+                .orElse(ex.getMessage());
+        return buildError(HttpStatus.UNPROCESSABLE_ENTITY, detail, request);
+    }
+
+    @ExceptionHandler(PlanAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handlePlanExists(PlanAlreadyExistsException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(PlanJobStateException.class)
+    public ResponseEntity<ErrorResponseDto> handleJobState(PlanJobStateException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(PlanGenerationNotConfiguredException.class)
+    public ResponseEntity<ErrorResponseDto> handleGenerationNotConfigured(
+            PlanGenerationNotConfiguredException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(PlanGenerationException.class)
+    public ResponseEntity<ErrorResponseDto> handleGeneration(PlanGenerationException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.BAD_GATEWAY, ex.getMessage(), request);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponseDto> handleBadRequest(IllegalArgumentException ex, HttpServletRequest request) {
         return buildError(HttpStatus.BAD_REQUEST, ex.getMessage(), request);

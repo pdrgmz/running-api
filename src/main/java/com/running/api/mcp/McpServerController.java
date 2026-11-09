@@ -2,11 +2,13 @@ package com.running.api.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.running.api.mcp.tools.ActivityTools;
 import com.running.api.mcp.tools.AnalyticsTools;
 import com.running.api.mcp.tools.StatsTools;
+import com.running.api.mcp.tools.TrainingTools;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.PostConstruct;
@@ -43,6 +45,7 @@ public class McpServerController {
     private final ActivityTools activityTools;
     private final StatsTools statsTools;
     private final AnalyticsTools analyticsTools;
+    private final TrainingTools trainingTools;
 
     private final Map<String, McpTool> tools = new LinkedHashMap<>();
     private final Map<String, SessionInfo> sessions = new ConcurrentHashMap<>();
@@ -95,6 +98,44 @@ public class McpServerController {
         registerTool("get_acwr_status", "Estado ACWR (riesgo de lesión)",
                 Map.of(),
                 args -> getAcwrStatus());
+
+        registerTool("get_training_context",
+                "Contexto completo del atleta para generar el plan semanal: resumen, ACWR, "
+                        + "actividades recientes, últimas 4 semanas, marcas personales y plan actual. "
+                        + "Devuelve JSON.",
+                Map.of("weekStart", new McpParam("string",
+                        "Lunes de la semana a planificar (YYYY-MM-DD). Opcional; por defecto la semana actual.",
+                        false)),
+                this::getTrainingContext);
+
+        registerTool("save_weekly_plan",
+                "Valida y guarda el plan semanal generado por el LLM. El usuario sale del JWT. "
+                        + "Devuelve JSON con ok/planId o, si isError=true, las violaciones a corregir. "
+                        + "El parámetro planJson es un string con el objeto del plan: "
+                        + "{\"summary\":\"...\",\"coachNotes\":\"...\",\"targetWeeklyDistanceMeters\":42000,"
+                        + "\"targetWeeklyLoad\":320,\"workouts\":[{\"date\":\"2026-11-16\",\"type\":\"EASY\","
+                        + "\"title\":\"Rodaje suave\",\"targetDistanceMeters\":8000,"
+                        + "\"targetDurationSeconds\":2880,\"targetPaceMinPerKm\":5.4,\"targetHrZone\":2}]}. "
+                        + "Tipos válidos: EASY, RECOVERY, LONG_RUN, TEMPO, INTERVALS, HILLS, RACE_PACE, "
+                        + "RACE, CROSS_TRAINING, OTHER.",
+                Map.of(
+                        "weekStart", new McpParam("string",
+                                "Lunes de la semana (YYYY-MM-DD). Debe coincidir con el job.", true),
+                        "planJson", new McpParam("string",
+                                "JSON del plan como string", true),
+                        "replace", new McpParam("boolean",
+                                "Si ya existe un plan activo, archívalo y crea una versión nueva.", false),
+                        "requestId", new McpParam("string",
+                                "Solo si el token no lo incluye; normalmente se toma del JWT.", false)),
+                this::saveWeeklyPlan);
+
+        registerTool("fail_generation_job",
+                "Marca el job de generación como FAILED cuando n8n no puede completar el plan.",
+                Map.of(
+                        "error", new McpParam("string", "Descripción del fallo", true),
+                        "requestId", new McpParam("string",
+                                "Solo si el token no lo incluye; normalmente se toma del JWT.", false)),
+                this::failGenerationJob);
     }
 
     private void registerTool(String name, String description,
@@ -147,7 +188,8 @@ public class McpServerController {
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "Endpoint principal MCP (JSON-RPC 2.0)",
                description = "Recibe peticiones JSON-RPC 2.0. Métodos soportados: initialize, ping, tools/list y tools/call. "
-                       + "Tras initialize se devuelve la cabecera Mcp-Session-Id que debe enviarse en las peticiones siguientes.")
+                       + "tools/list y tools/call son stateless: no requieren Mcp-Session-Id, solo el token. "
+                       + "initialize devuelve opcionalmente una sesión para SSE.")
     public JsonNode handleRequest(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                     description = "Petición JSON-RPC 2.0 (jsonrpc, id, method y params)", required = true)
@@ -168,13 +210,6 @@ public class McpServerController {
             return null;
         }
 
-        // Validar sesión para métodos que no son initialize
-        if (!"initialize".equals(method) && !"ping".equals(method)) {
-            if (sessionId == null || !sessions.containsKey(sessionId)) {
-                return errorResponse(id, -32001, "Sesión no válida o expirada. Llame a initialize primero.");
-            }
-        }
-
         JsonNode result = switch (method) {
             case "initialize" -> initialize(id, response);
             case "ping" -> ping(id);
@@ -192,7 +227,6 @@ public class McpServerController {
             sessions.put(newSessionId, new SessionInfo(newSessionId, System.currentTimeMillis()));
             log.debug("[MCP] Nueva sesión creada: {}", newSessionId);
         } else if (sessionId != null && sessions.containsKey(sessionId)) {
-            SessionInfo info = sessions.get(sessionId);
             sessions.put(sessionId, new SessionInfo(sessionId, System.currentTimeMillis()));
         }
 
@@ -230,11 +264,18 @@ public class McpServerController {
             ObjectNode schema = toolNode.putObject("inputSchema");
             schema.put("type", "object");
             ObjectNode properties = schema.putObject("properties");
+            ArrayNode required = objectMapper.createArrayNode();
             tool.params().forEach((paramName, param) -> {
                 ObjectNode paramNode = properties.putObject(paramName);
                 paramNode.put("type", param.type());
                 paramNode.put("description", param.description());
+                if (param.required()) {
+                    required.add(paramName);
+                }
             });
+            if (required.size() > 0) {
+                schema.set("required", required);
+            }
         });
         return response;
     }
@@ -242,27 +283,37 @@ public class McpServerController {
     private JsonNode callTool(JsonNode params, JsonNode id) {
         String toolName = params.path("name").asText();
         JsonNode arguments = params.path("arguments");
+        if (arguments == null || arguments.isMissingNode() || arguments.isNull()) {
+            arguments = objectMapper.createObjectNode();
+        }
 
         McpTool tool = tools.get(toolName);
         if (tool == null) {
             return errorResponse(id, -32602, "Herramienta no encontrada: " + toolName);
         }
 
-        // Validate required parameters
+        // Validar solo los parámetros marcados como requeridos. Los booleanos,
+        // objetos y arrays no se validan con asText(), que los convertiría en "".
         for (Map.Entry<String, McpParam> entry : tool.params().entrySet()) {
-            if (!arguments.has(entry.getKey()) || arguments.path(entry.getKey()).asText().isBlank()) {
+            if (!entry.getValue().required()) {
+                continue;
+            }
+            JsonNode value = arguments.get(entry.getKey());
+            if (value == null || value.isNull()
+                    || (value.isTextual() && value.asText().isBlank())) {
                 return errorResponse(id, -32602, "Parámetro requerido faltante: " + entry.getKey());
             }
         }
 
         try {
-            String result = tool.function().execute(arguments);
+            McpToolResult result = tool.function().execute(arguments);
             ObjectNode response = baseResponse(id);
-            response.putObject("result")
-                    .withArray("content")
+            ObjectNode resultNode = response.putObject("result");
+            resultNode.put("isError", result.isError());
+            resultNode.putArray("content")
                     .addObject()
                     .put("type", "text")
-                    .put("text", result);
+                    .put("text", result.text());
             return response;
         } catch (Exception e) {
             log.error("[MCP] Error ejecutando herramienta {}: {}", toolName, e.getMessage(), e);
@@ -296,55 +347,70 @@ public class McpServerController {
         return response;
     }
 
-    private String getActivityById(JsonNode args) {
-        return activityTools.getActivityById(args.path("id").asText());
+    private McpToolResult getActivityById(JsonNode args) {
+        return McpToolResult.success(activityTools.getActivityById(args.path("id").asText()));
     }
 
-    private String listActivities() {
-        return activityTools.listActivities();
+    private McpToolResult listActivities() {
+        return McpToolResult.success(activityTools.listActivities());
     }
 
-    private String getRecentActivities() {
-        return activityTools.getRecentActivities();
+    private McpToolResult getRecentActivities() {
+        return McpToolResult.success(activityTools.getRecentActivities());
     }
 
-    private String getSummaryStats() {
-        return statsTools.getSummaryStats();
+    private McpToolResult getSummaryStats() {
+        return McpToolResult.success(statsTools.getSummaryStats());
     }
 
-    private String getPersonalRecords() {
-        return statsTools.getPersonalRecords();
+    private McpToolResult getPersonalRecords() {
+        return McpToolResult.success(statsTools.getPersonalRecords());
     }
 
-    private String getSummaryByPeriod(JsonNode args) {
-        return statsTools.getSummaryByPeriod(args.path("period").asText());
+    private McpToolResult getSummaryByPeriod(JsonNode args) {
+        return McpToolResult.success(statsTools.getSummaryByPeriod(args.path("period").asText()));
     }
 
-    private String getSplits(JsonNode args) {
-        return analyticsTools.getSplits(args.path("activityId").asText());
+    private McpToolResult getSplits(JsonNode args) {
+        return McpToolResult.success(analyticsTools.getSplits(args.path("activityId").asText()));
     }
 
-    private String getHrZones(JsonNode args) {
-        return analyticsTools.getHrZones(args.path("activityId").asText());
+    private McpToolResult getHrZones(JsonNode args) {
+        return McpToolResult.success(analyticsTools.getHrZones(args.path("activityId").asText()));
     }
 
-    private String getTrainingLoad(JsonNode args) {
-        return analyticsTools.getTrainingLoad(args.path("activityId").asText());
+    private McpToolResult getTrainingLoad(JsonNode args) {
+        return McpToolResult.success(analyticsTools.getTrainingLoad(args.path("activityId").asText()));
     }
 
-    private String getVo2Max(JsonNode args) {
-        return analyticsTools.getVo2Max(args.path("activityId").asText());
+    private McpToolResult getVo2Max(JsonNode args) {
+        return McpToolResult.success(analyticsTools.getVo2Max(args.path("activityId").asText()));
     }
 
-    private String getAcwrStatus() {
-        return analyticsTools.getAcwrStatus();
+    private McpToolResult getAcwrStatus() {
+        return McpToolResult.success(analyticsTools.getAcwrStatus());
+    }
+
+    private McpToolResult getTrainingContext(JsonNode args) {
+        return trainingTools.getTrainingContext(args);
+    }
+
+    private McpToolResult saveWeeklyPlan(JsonNode args) {
+        return trainingTools.saveWeeklyPlan(args);
+    }
+
+    private McpToolResult failGenerationJob(JsonNode args) {
+        return trainingTools.failGenerationJob(args);
     }
 
     private record McpTool(String name, String description,
             Map<String, McpParam> params, ToolFunction function) {
     }
 
-    private record McpParam(String type, String description) {
+    private record McpParam(String type, String description, boolean required) {
+        private McpParam(String type, String description) {
+            this(type, description, true);
+        }
     }
 
     private record SessionInfo(String sessionId, long lastAccessed) {
@@ -352,6 +418,6 @@ public class McpServerController {
 
     @FunctionalInterface
     private interface ToolFunction {
-        String execute(JsonNode arguments);
+        McpToolResult execute(JsonNode arguments);
     }
 }

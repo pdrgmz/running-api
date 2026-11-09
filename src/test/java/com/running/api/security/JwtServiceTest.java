@@ -79,4 +79,41 @@ class JwtServiceTest {
 
         assertThat(shortSecret.parseToken(token).id()).isEqualTo(42L);
     }
+
+    @Test
+    void generatesPlanGenerationTokenWithMcpAudienceScopesAndRequestId() {
+        String token = jwtService.generatePlanGenerationToken(
+                user(), "request-123", java.time.Duration.ofMinutes(30));
+
+        UserPrincipal principal = jwtService.parseToken(token);
+
+        assertThat(principal.id()).isEqualTo(42L);
+        assertThat(principal.audience()).isEqualTo("mcp");
+        assertThat(principal.requestId()).isEqualTo("request-123");
+        assertThat(principal.scopes())
+                .containsExactlyInAnyOrder(JwtService.SCOPE_TRAINING_READ,
+                        JwtService.SCOPE_TRAINING_WRITE);
+        assertThat(principal.isMcpOnly()).isTrue();
+        assertThat(principal.hasScope(JwtService.SCOPE_TRAINING_WRITE)).isTrue();
+    }
+
+    @Test
+    void legacyAccessTokenHasNoScopesAndIsNotMcpOnly() {
+        String token = jwtService.generateToken(user());
+
+        UserPrincipal principal = jwtService.parseToken(token);
+
+        assertThat(principal.scopes()).isEmpty();
+        assertThat(principal.isMcpOnly()).isFalse();
+        assertThat(principal.hasScope(JwtService.SCOPE_TRAINING_WRITE)).isTrue();
+    }
+
+    @Test
+    void planGenerationTokenCannotBeUsedAsRefreshToken() {
+        String token = jwtService.generatePlanGenerationToken(
+                user(), "request-123", java.time.Duration.ofMinutes(30));
+
+        assertThatThrownBy(() -> jwtService.parseRefreshToken(token))
+                .isInstanceOf(JwtException.class);
+    }
 }

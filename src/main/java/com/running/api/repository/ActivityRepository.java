@@ -30,6 +30,9 @@ public interface ActivityRepository extends JpaRepository<Activity, String> {
 
     List<Activity> findByUserIdOrderByStartTimeDesc(Long userId);
 
+    List<Activity> findByUserIdAndStartTimeBetweenOrderByStartTimeAsc(
+            Long userId, LocalDateTime start, LocalDateTime end);
+
     List<Activity> findByUserIdAndDistanceMetersGreaterThanEqual(Long userId, Double distanceMeters);
 
     List<Activity> findByIdInAndUserId(List<String> ids, Long userId);
