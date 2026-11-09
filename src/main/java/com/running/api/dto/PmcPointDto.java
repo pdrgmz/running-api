@@ -21,6 +21,9 @@ public record PmcPointDto(
     @Schema(description = "Training Stress Balance (CTL - ATL) - Estado de forma", example = "-15.7")
     double tsb,
 
-    @Schema(description = "Acute:Chronic Workload Ratio (ATL / CTL) - Ratio de riesgo de lesión", example = "1.30")
-    double acwr
+    @Schema(description = "Acute:Chronic Workload Ratio ATL(7d) / CTL(28d)", example = "1.30")
+    double acwr,
+
+    @Schema(description = "Chronic Training Load (28 días) usado por el ACWR", example = "24.0")
+    double chronicLoad28
 ) {}

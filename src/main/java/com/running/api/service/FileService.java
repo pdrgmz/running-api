@@ -44,6 +44,8 @@ public class FileService {
     private final ObjectMapper objectMapper;
     private final GlobalSummaryStatsRepository summaryStatsRepository;
     private final StatsService statsService;
+    private final AnalyticsService analyticsService;
+    private final MetricsRecalculationService metricsRecalculationService;
     private final BulkUploadStatusTracker bulkUploadStatusTracker;
     private final TrackpointCompletionService trackpointCompletionService;
     private final PlatformTransactionManager transactionManager;
@@ -58,6 +60,8 @@ public class FileService {
                        ObjectMapper objectMapper,
                        GlobalSummaryStatsRepository summaryStatsRepository,
                        StatsService statsService,
+                       AnalyticsService analyticsService,
+                       MetricsRecalculationService metricsRecalculationService,
                        BulkUploadStatusTracker bulkUploadStatusTracker,
                        TrackpointCompletionService trackpointCompletionService,
                        PlatformTransactionManager transactionManager,
@@ -70,6 +74,8 @@ public class FileService {
         this.objectMapper = objectMapper;
         this.summaryStatsRepository = summaryStatsRepository;
         this.statsService = statsService;
+        this.analyticsService = analyticsService;
+        this.metricsRecalculationService = metricsRecalculationService;
         this.bulkUploadStatusTracker = bulkUploadStatusTracker;
         this.trackpointCompletionService = trackpointCompletionService;
         this.transactionManager = transactionManager;
@@ -83,6 +89,10 @@ public class FileService {
         // La actividad ya está persistida y gestionada por JPA: completamos su telemetría
         // antes de calcular estadísticas y récords para que estos usen los datos finales.
         trackpointCompletionService.completeAfterImport(saved);
+
+        // Recalculamos el TRIMP/VO2 con la FC de referencia del atleta, ya con userId
+        // asignado. Los parsers los habían estimado con el pico de la propia sesión.
+        analyticsService.refreshHeartRateMetrics(saved);
 
         recalculateAllStats(saved.getUserId());
         statsService.checkAndSetPersonalRecords(saved);
@@ -290,6 +300,9 @@ public class FileService {
         log.info("[{}] Recalculando estadísticas finales...", uploadId);
         try {
             recalculateAllStats(userId);
+            // Al importar en paralelo cada archivo solo ve una parte del historial. Se
+            // recalculan TRIMP/VO2 con la FC de referencia definitiva del atleta.
+            metricsRecalculationService.recalculateAll(userId);
             statsService.recalculateAllPersonalRecords(userId);
             log.info("[{}] Estadísticas y records recalculados", uploadId);
         } catch (Exception e) {

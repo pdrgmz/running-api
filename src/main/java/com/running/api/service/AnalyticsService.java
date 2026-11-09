@@ -46,6 +46,18 @@ public class AnalyticsService {
     private static final double PMC_CTL_DAYS = 42.0;
     private static final double PMC_ATL_DAYS = 7.0;
     private static final int PMC_WARMUP_DAYS = 120;
+
+    /**
+     * Ventana crónica del ACWR. Los umbrales 0.8-1.3 proceden de los estudios 7:28;
+     * el CTL de 42 días se mantiene únicamente para la curva PMC (fitness/fatiga).
+     */
+    private static final double ACWR_CHRONIC_DAYS = 28.0;
+
+    /** Días mínimos de historial para que el ACWR sea interpretable. */
+    private static final int ACWR_MIN_HISTORY_DAYS = 28;
+
+    /** Carga crónica mínima: por debajo, el ratio amplifica el ruido de datos casi nulos. */
+    private static final double ACWR_MIN_CHRONIC_LOAD = 1.0;
     private static final double VO2MAX_RECREATIONAL_THRESHOLD = 42.0;
     private static final int FALLBACK_MAX_HR = 185;
 
@@ -573,6 +585,27 @@ public class AnalyticsService {
         return modified;
     }
 
+    /**
+     * Recalcula las métricas derivadas de la FC máxima de referencia del atleta.
+     *
+     * <p>Se invoca tras importar, cuando la actividad ya tiene {@code userId} y la telemetría
+     * está completa. Así el TRIMP guardado se calcula con la misma referencia que usa la API
+     * y no con el pico de la sesión, que era el comportamiento previo cuando los parsers
+     * llamaban a {@link #populateMetrics(Activity)} antes de asignar el propietario.
+     *
+     * @param activity actividad ya persistida o a persistir
+     */
+    public void refreshHeartRateMetrics(Activity activity) {
+        if (activity == null) {
+            return;
+        }
+        int athleteMaxHr = resolveAthleteMaxHr(activity.getUserId(), activity.getMaxHeartRate());
+        activity.setTrainingLoad(computeTrainingLoadDetails(activity, athleteMaxHr).getTrainingLoad());
+        Vo2MaxVamResponseDto vo2 = computeVo2MaxAndVamDetails(activity, athleteMaxHr);
+        activity.setVo2MaxEstimated(vo2.getVo2MaxEstimated());
+        activity.setVamKmH(vo2.getVamKmH());
+    }
+
     public List<PmcPointDto> calculatePmcHistory(Long userId, LocalDate startDate, LocalDate endDate) {
         // 1. Ampliamos el rango de búsqueda 120 días atrás para el "warm-up" del algoritmo EWMA
         LocalDate warmUpStartDate = startDate.minusDays(PMC_WARMUP_DAYS);
@@ -591,10 +624,12 @@ public class AnalyticsService {
 
         // Variables de estado iniciales para EWMA
         double ctl = 0.0;
+        double ctl28 = 0.0;
         double atl = 0.0;
 
-        // Factores de suavizado para 42 días (CTL) y 7 días (ATL)
+        // Factores de suavizado para 42 días (CTL del PMC), 28 días (CTL del ACWR) y 7 días (ATL)
         double alphaCtl = 1.0 - Math.exp(-1.0 / PMC_CTL_DAYS); // ~0.0235
+        double alphaCtl28 = 1.0 - Math.exp(-1.0 / ACWR_CHRONIC_DAYS); // ~0.0351
         double alphaAtl = 1.0 - Math.exp(-1.0 / PMC_ATL_DAYS);  // ~0.1331
 
         // 3. Iteración DÍA A DÍA CALENDARIO contigua (procesa días de descanso con 0.0 TRIMP)
@@ -604,11 +639,13 @@ public class AnalyticsService {
 
             // Fórmulas de acumulación y decaimiento exponencial
             ctl = ctl + alphaCtl * (dailyTrimp - ctl);
+            ctl28 = ctl28 + alphaCtl28 * (dailyTrimp - ctl28);
             atl = atl + alphaAtl * (dailyTrimp - atl);
 
             double tsb = ctl - atl;
-            // A:C Ratio instantáneo = ATL / CTL
-            double acwr = (ctl > 0) ? (atl / ctl) : 0.0;
+            // A:C Ratio instantáneo = ATL(7d) / CTL(28d). Se usa la ventana estándar del
+            // ACWR, no el CTL de 42 días que se muestra como fitness en la propia curva.
+            double acwr = (ctl28 > 0) ? (atl / ctl28) : 0.0;
 
             // 4. Solo guardamos en el resultado los días dentro del rango solicitado por el usuario
             if (!current.isBefore(startDate)) {
@@ -618,7 +655,8 @@ public class AnalyticsService {
                         roundTwoDecimals(ctl),
                         roundTwoDecimals(atl),
                         roundTwoDecimals(tsb),
-                        roundTwoDecimals(acwr)
+                        roundTwoDecimals(acwr),
+                        roundTwoDecimals(ctl28)
                 ));
             }
 
@@ -656,35 +694,37 @@ public class AnalyticsService {
 
     public AcwrStatusDto calculateCurrentAcwr(Long userId) {
         LocalDate today = LocalDate.now();
+        LocalDate earliestDate = activityRepository.findEarliestActivityDate(userId).orElse(null);
 
-        // Obtenemos la fecha de la primera actividad en la BD (o 1 año atrás por defecto)
-        LocalDate earliestDate = activityRepository.findEarliestActivityDate(userId)
-                .orElse(today.minusYears(1));
-
-        // Calculamos el historial del PMC procesando la inercia real desde la primera carrera
-        List<PmcPointDto> pmcHistory = calculatePmcHistory(userId, earliestDate, today);
-
-        if (pmcHistory.isEmpty()) {
-            return new AcwrStatusDto(today, 0.0, 0.0, 0.0, "UNDETERMINED", "Sin datos suficientes.");
+        if (earliestDate == null) {
+            return undeterminedAcwr(today, 0.0, 0.0, "Sin actividades para calcular el ACWR.");
         }
 
-        // Tomamos el último punto calculado (correspondiente al día de hoy)
-        PmcPointDto latest = pmcHistory.get(pmcHistory.size() - 1);
+        EwmaLoads loads = calculateEwmaLoads(userId, earliestDate, today,
+                PMC_ATL_DAYS, ACWR_CHRONIC_DAYS);
+        double acute = loads.acute();
+        double chronic = loads.chronic();
 
-        double acute = latest.atl();
-        double chronic = latest.ctl();
-        double acwr = (chronic > 0) ? roundTwoDecimals(acute / chronic) : 0.0;
+        // El ACWR 7:28 solo es interpretable con al menos una ventana crónica completa.
+        boolean enoughHistory = !earliestDate.isAfter(today.minusDays(ACWR_MIN_HISTORY_DAYS - 1L));
+        if (!enoughHistory || chronic < ACWR_MIN_CHRONIC_LOAD) {
+            return undeterminedAcwr(today, acute, chronic,
+                    "Historial insuficiente: el ACWR necesita al menos "
+                            + ACWR_MIN_HISTORY_DAYS + " días de datos.");
+        }
+
+        double ratio = acute / chronic;
 
         String zone;
         String recommendation;
 
-        if (acwr < 0.80) {
+        if (ratio < 0.80) {
             zone = "UNDERTRAINING";
             recommendation = "Carga baja (Sub-entrenamiento). Riesgo de pérdida de condición física.";
-        } else if (acwr <= 1.30) {
+        } else if (ratio <= 1.30) {
             zone = "SWEET_SPOT";
             recommendation = "Zona Dulce (0.8 - 1.3). Carga óptima que minimiza el riesgo de lesión.";
-        } else if (acwr <= 1.50) {
+        } else if (ratio <= 1.50) {
             zone = "HIGH_RISK";
             recommendation = "Atención: Incremento rápido de carga. Monitorear fatiga muscular.";
         } else {
@@ -692,6 +732,59 @@ public class AnalyticsService {
             recommendation = "Peligro (> 1.5): Pico de carga excesivo. Riesgo de lesión elevado.";
         }
 
-        return new AcwrStatusDto(latest.date(), acute, chronic, acwr, zone, recommendation);
+        return new AcwrStatusDto(today,
+                roundTwoDecimals(acute),
+                roundTwoDecimals(chronic),
+                roundTwoDecimals(ratio),
+                zone,
+                recommendation);
+    }
+
+    /**
+     * ATL y CTL con suavizado exponencial sobre la serie diaria de TRIMP.
+     *
+     * <p>Se procesan días calendario contiguos (los descansos cuentan como carga 0) y se
+     * arranca {@value #PMC_WARMUP_DAYS} días antes de la primera actividad para que el EWMA
+     * llegue estabilizado al periodo consultado.
+     *
+     * @return cargas aguda y crónica sin redondear
+     */
+    private EwmaLoads calculateEwmaLoads(Long userId, LocalDate startDate, LocalDate endDate,
+                                         double acuteDays, double chronicDays) {
+        LocalDate warmUpStartDate = startDate.minusDays(PMC_WARMUP_DAYS);
+
+        Map<LocalDate, Double> dailyTrimpMap = activityRepository
+                .findDailyTrimpSum(userId, warmUpStartDate, endDate)
+                .stream()
+                .collect(Collectors.toMap(
+                        DailyTrimpProjection::getDate,
+                        DailyTrimpProjection::getTotalTrimp,
+                        Double::sum));
+
+        double alphaAcute = 1.0 - Math.exp(-1.0 / acuteDays);
+        double alphaChronic = 1.0 - Math.exp(-1.0 / chronicDays);
+        double acute = 0.0;
+        double chronic = 0.0;
+
+        for (LocalDate current = warmUpStartDate; !current.isAfter(endDate); current = current.plusDays(1)) {
+            double dailyTrimp = dailyTrimpMap.getOrDefault(current, 0.0);
+            acute += alphaAcute * (dailyTrimp - acute);
+            chronic += alphaChronic * (dailyTrimp - chronic);
+        }
+
+        return new EwmaLoads(acute, chronic);
+    }
+
+    private AcwrStatusDto undeterminedAcwr(LocalDate date, double acute, double chronic,
+                                           String recommendation) {
+        return new AcwrStatusDto(date,
+                roundTwoDecimals(acute),
+                roundTwoDecimals(chronic),
+                0.0,
+                "UNDETERMINED",
+                recommendation);
+    }
+
+    private record EwmaLoads(double acute, double chronic) {
     }
 }

@@ -12,7 +12,7 @@ public record AcwrStatusDto(
     @Schema(description = "Carga Aguda / Fatiga (ATL 7 días)", example = "65.0")
     double acuteLoad,
 
-    @Schema(description = "Carga Crónica / Fitness (CTL 42 días)", example = "50.0")
+    @Schema(description = "Carga Crónica / Fitness (CTL 28 días)", example = "50.0")
     double chronicLoad,
 
     @Schema(description = "Valor numérico del ratio (ATL / CTL)", example = "1.30")

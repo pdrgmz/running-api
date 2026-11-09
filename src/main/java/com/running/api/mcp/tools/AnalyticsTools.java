@@ -135,7 +135,7 @@ public class AnalyticsTools {
 
                     Fecha: %s
                     Carga Aguda (7 días): %.2f
-                    Carga Crónica (42 días): %.2f
+                    Carga Crónica (28 días): %.2f
                     Ratio ACWR: %.2f
                     Zona: %s
 
