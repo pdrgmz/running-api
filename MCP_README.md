@@ -362,6 +362,12 @@ La API acepta este parámetro **solo en `/mcp`**; las rutas REST siguen exigiend
 `Authorization`. Como alternativa puedes usar la cabecera `Authorization: Bearer <token>` con
 `curl` o con un nodo HTTP Request.
 
+> La URL del MCP (`APP_TRAINING_PLAN_MCP_URL`) se resuelve **desde n8n**, no desde la API. Si n8n
+> corre en otro host o contenedor, `localhost` o el nombre de servicio de Docker (`running-api`)
+> no son accesibles: usa la URL pública o `host.docker.internal`. Comprueba la conectividad desde
+> la máquina de n8n con `curl -i "<mcpUrl>?access_token=<token>"`; un `401` significa que llega y
+> solo falta un token válido, mientras que `fetch failed` / timeout es un problema de red o DNS.
+
 No se necesita sesión MCP ni credenciales por usuario dentro de n8n.
 
 ---

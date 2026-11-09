@@ -276,12 +276,17 @@ src/main/java/com/running/api/
 | `APP_TRAINING_PLAN_ENABLED` | `false` | Activa el cron semanal (la generación manual funciona igualmente) |
 | `APP_TRAINING_PLAN_CRON` | `0 0 18 * * SUN` | Cron de generación semanal (hora del servidor) |
 | `APP_TRAINING_PLAN_N8N_WEBHOOK_URL` | *(vacío)* | URL del webhook de n8n. Sin ella, `POST /plans/generate` responde `503` |
-| `APP_TRAINING_PLAN_MCP_URL` | `http://localhost:8080/mcp` | URL del MCP que n8n usará (se envía en el body del webhook) |
+| `APP_TRAINING_PLAN_MCP_URL` | `http://localhost:8080/mcp` | URL del MCP **tal como la ve n8n** (se envía en el body del webhook). Debe ser resoluble desde n8n |
 | `APP_TRAINING_PLAN_TOKEN_TTL_MINUTES` | `45` | Vigencia del JWT efímero entregado a n8n |
 | `APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES` | `60` | Tras este tiempo, un job `PENDING`/`RUNNING` pasa a `TIMEOUT` |
 | `APP_TRAINING_PLAN_RECONCILE_CRON` | `0 */10 * * * *` | Cron de reconciliación de jobs caducados |
 | `APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS` | `20` | Timeout de la llamada de la API al webhook (no espera al LLM) |
 | `APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT` | `25` | Incremento máximo del volumen semanal sobre la media de 4 semanas |
+
+> `APP_TRAINING_PLAN_MCP_URL` se resuelve **desde el contenedor/host de n8n**, no desde la API. Si
+> n8n no comparte red con la API, `http://localhost:8080/mcp` y `http://running-api:8080/mcp` no
+> funcionan: usa la URL pública (por ejemplo `https://running-api.pdrgmz.uk/mcp`) o
+> `http://host.docker.internal:8080/mcp` si ambos están en la misma máquina.
 
 ### Archivo `application.yml`
 
