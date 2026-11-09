@@ -103,6 +103,56 @@ public class TrainingPlanService {
     }
 
     // ---------------------------------------------------------------------
+    // Borrado de planes
+    // ---------------------------------------------------------------------
+
+    /**
+     * Elimina un plan (y sus sesiones) junto con los jobs de generación que lo
+     * referencian. Si se quiere regenerar conservando el histórico, es preferible
+     * {@code POST /plans/generate} con {@code replace=true}.
+     */
+    @Transactional
+    public void deletePlan(Long userId, String planId) {
+        TrainingPlan plan = planRepository.findByIdAndUserId(planId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Plan no encontrado: " + planId));
+        purgePlans(userId, List.of(plan));
+    }
+
+    /**
+     * Elimina todas las versiones (activas y archivadas) de una semana.
+     *
+     * @return número de versiones eliminadas
+     */
+    @Transactional
+    public int deletePlansByWeek(Long userId, LocalDate weekStart) {
+        if (weekStart == null) {
+            throw new IllegalArgumentException("weekStart es obligatorio");
+        }
+        if (weekStart.getDayOfWeek() != DayOfWeek.MONDAY) {
+            throw new IllegalArgumentException("weekStart debe ser un lunes: " + weekStart);
+        }
+        List<TrainingPlan> plans = planRepository
+                .findByUserIdAndWeekStartOrderByVersionDesc(userId, weekStart);
+        if (plans.isEmpty()) {
+            return 0;
+        }
+        purgePlans(userId, plans);
+        return plans.size();
+    }
+
+    private void purgePlans(Long userId, List<TrainingPlan> plans) {
+        List<String> planIds = plans.stream().map(TrainingPlan::getId).toList();
+        List<PlanGenerationJob> jobs = jobRepository.findByUserIdAndPlanIdIn(userId, planIds);
+        if (!jobs.isEmpty()) {
+            jobRepository.deleteAllInBatch(jobs);
+        }
+        // deleteAll (no deleteAllInBatch) para que el cascade elimine planned_workouts.
+        planRepository.deleteAll(plans);
+        log.info("Eliminados {} plan(es) del userId={} (planIds={}) y {} job(s) asociados",
+                plans.size(), userId, planIds, jobs.size());
+    }
+
+    // ---------------------------------------------------------------------
     // Guardado transaccional del plan + job
     // ---------------------------------------------------------------------
 
@@ -266,9 +316,58 @@ public class TrainingPlanService {
         return toJobResponse(job);
     }
 
+    /**
+     * Elimina el registro de un job. Útil para limpiar jobs que quedaron
+     * atascados en {@code PENDING} y así poder volver a generar esa semana.
+     * <p>
+     * No elimina el plan ya guardado. Si n8n sigue ejecutándose en paralelo,
+     * su llamada posterior a {@code save_weekly_plan} fallará con "job no
+     * encontrado". Por eso los jobs {@code RUNNING} requieren {@code force}.
+     */
     @Transactional
-    public int reconcileStaleJobs(Duration timeout) {
-        LocalDateTime threshold = LocalDateTime.now().minus(timeout);
+    public void deleteJob(Long userId, String requestId, boolean force) {
+        PlanGenerationJob job = jobRepository.findByIdAndUserId(requestId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Job de generación no encontrado: " + requestId));
+        requireDeletable(job, force);
+        jobRepository.delete(job);
+        log.info("Job de plan eliminado: requestId={}, userId={}, status={}",
+                requestId, userId, job.getStatus());
+    }
+
+    /**
+     * Elimina todos los jobs del usuario con un estado concreto.
+     *
+     * @return número de jobs eliminados
+     */
+    @Transactional
+    public int deleteJobs(Long userId, TrainingJobStatus status, boolean force) {
+        if (status == null) {
+            throw new IllegalArgumentException("El estado de los jobs es obligatorio");
+        }
+        if (status == TrainingJobStatus.RUNNING && !force) {
+            throw new PlanJobStateException(
+                    "Hay jobs en ejecución (RUNNING). Espera a que terminen o usa force=true");
+        }
+        List<PlanGenerationJob> jobs = jobRepository.findByUserIdAndStatus(userId, status);
+        if (jobs.isEmpty()) {
+            return 0;
+        }
+        jobRepository.deleteAllInBatch(jobs);
+        log.info("Eliminados {} jobs de plan con estado {} para userId={}",
+                jobs.size(), status, userId);
+        return jobs.size();
+    }
+
+    private static void requireDeletable(PlanGenerationJob job, boolean force) {
+        if (job.getStatus() == TrainingJobStatus.RUNNING && !force) {
+            throw new PlanJobStateException(
+                    "El job está en ejecución (RUNNING). Espera a que termine o usa force=true");
+        }
+    }
+
+    @Transactional
+    public int reconcileStaleJobs(Duration timeout) {        LocalDateTime threshold = LocalDateTime.now().minus(timeout);
         List<PlanGenerationJob> stale = jobRepository.findByStatusInAndUpdatedAtBefore(
                 ACTIVE_JOB_STATUSES, threshold);
         for (PlanGenerationJob job : stale) {

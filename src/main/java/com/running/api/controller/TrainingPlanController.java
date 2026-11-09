@@ -1,6 +1,8 @@
 package com.running.api.controller;
 
 import com.running.api.dto.ErrorResponseDto;
+import com.running.api.dto.DeletedJobsResponseDto;
+import com.running.api.dto.DeletedPlansResponseDto;
 import com.running.api.dto.GenerateTrainingPlanRequestDto;
 import com.running.api.dto.GenerateTrainingPlanResponseDto;
 import com.running.api.dto.PlanGenerationJobResponseDto;
@@ -8,6 +10,7 @@ import com.running.api.dto.TrainingPlanResponseDto;
 import com.running.api.dto.TrainingPlanSummaryDto;
 import com.running.api.dto.TrainingPreferencesDto;
 import com.running.api.dto.UpdateTrainingPreferencesRequestDto;
+import com.running.api.model.TrainingJobStatus;
 import com.running.api.security.UserPrincipal;
 import com.running.api.service.TrainingPlanGenerationService;
 import com.running.api.service.TrainingPlanService;
@@ -23,6 +26,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -110,8 +114,41 @@ public class TrainingPlanController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    @PostMapping("/plans/generate")
-    @Operation(summary = "Generar un plan semanal con IA",
+    @DeleteMapping("/plans/{id}")
+    @Operation(summary = "Eliminar un plan",
+            description = "Elimina el plan, sus sesiones y los jobs que lo referencian. "
+                    + "Para regenerar conservando el histórico, usa POST /plans/generate con replace=true.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Plan eliminado"),
+            @ApiResponse(responseCode = "404", description = "El plan no existe o no pertenece al usuario",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Void> deletePlan(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Parameter(description = "ID del plan", example = "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+            @PathVariable String id) {
+        trainingPlanService.deletePlan(principal.id(), id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/plans/week/{weekStart}")
+    @Operation(summary = "Eliminar todas las versiones de una semana",
+            description = "Elimina las versiones activas y archivadas de la semana, sus sesiones y sus jobs. "
+                    + "Útil para volver a generar la semana desde cero.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Planes eliminados"),
+            @ApiResponse(responseCode = "400", description = "La fecha no es un lunes",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<DeletedPlansResponseDto> deletePlansByWeek(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Parameter(description = "Lunes de la semana", example = "2026-11-16")
+            @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStart) {
+        int deleted = trainingPlanService.deletePlansByWeek(principal.id(), weekStart);
+        return ResponseEntity.ok(new DeletedPlansResponseDto(deleted));
+    }
+
+    @PostMapping("/plans/generate")    @Operation(summary = "Generar un plan semanal con IA",
             description = "Crea un job, firma un JWT efímero con aud=mcp y lo envía al webhook genérico de n8n. "
                     + "Responde 202; el estado se consulta en /generation-jobs/{requestId}. "
                     + "El plan solo existe cuando n8n llama a save_weekly_plan y la API lo persiste.")
@@ -154,6 +191,49 @@ public class TrainingPlanController {
     public ResponseEntity<List<PlanGenerationJobResponseDto>> listJobs(
             @AuthenticationPrincipal UserPrincipal principal) {
         return ResponseEntity.ok(trainingPlanService.listRecentJobs(principal.id()));
+    }
+
+    @DeleteMapping("/generation-jobs/{requestId}")
+    @Operation(summary = "Eliminar un job de generación",
+            description = "Borra el registro del job. No elimina el plan ya guardado. "
+                    + "Los jobs en estado RUNNING requieren force=true porque n8n podría seguir trabajando.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Job eliminado"),
+            @ApiResponse(responseCode = "404", description = "El job no existe o no pertenece al usuario",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "El job está RUNNING y no se envió force=true",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<Void> deleteJob(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Parameter(description = "requestId del job", example = "8f3c2a1e-...")
+            @PathVariable String requestId,
+            @Parameter(description = "Permite eliminar también jobs en RUNNING", example = "false")
+            @RequestParam(defaultValue = "false") boolean force) {
+        trainingPlanService.deleteJob(principal.id(), requestId, force);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/generation-jobs")
+    @Operation(summary = "Eliminar jobs de generación por estado",
+            description = "Borra todos los jobs del usuario con el estado indicado. "
+                    + "Útil para limpiar jobs atascados en PENDING antes de volver a generar la semana. "
+                    + "Los jobs RUNNING requieren force=true.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Jobs eliminados"),
+            @ApiResponse(responseCode = "400", description = "Estado no válido",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+            @ApiResponse(responseCode = "409", description = "Hay jobs RUNNING y no se envió force=true",
+                    content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+    })
+    public ResponseEntity<DeletedJobsResponseDto> deleteJobs(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Parameter(description = "Estado a eliminar", example = "PENDING")
+            @RequestParam TrainingJobStatus status,
+            @Parameter(description = "Permite eliminar también jobs en RUNNING", example = "false")
+            @RequestParam(defaultValue = "false") boolean force) {
+        int deleted = trainingPlanService.deleteJobs(principal.id(), status, force);
+        return ResponseEntity.ok(new DeletedJobsResponseDto(deleted));
     }
 
     @GetMapping("/preferences")

@@ -24,6 +24,10 @@ public interface PlanGenerationJobRepository extends JpaRepository<PlanGeneratio
     boolean existsByUserIdAndWeekStartAndStatusIn(
             Long userId, LocalDate weekStart, Collection<TrainingJobStatus> statuses);
 
+    List<PlanGenerationJob> findByUserIdAndStatus(Long userId, TrainingJobStatus status);
+
+    List<PlanGenerationJob> findByUserIdAndPlanIdIn(Long userId, Collection<String> planIds);
+
     List<PlanGenerationJob> findByStatusInAndUpdatedAtBefore(
             Collection<TrainingJobStatus> statuses, LocalDateTime updatedBefore);
 }

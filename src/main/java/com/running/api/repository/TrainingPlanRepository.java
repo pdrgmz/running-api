@@ -21,6 +21,8 @@ public interface TrainingPlanRepository extends JpaRepository<TrainingPlan, Stri
 
     Optional<TrainingPlan> findFirstByUserIdAndWeekStartOrderByVersionDesc(Long userId, LocalDate weekStart);
 
+    List<TrainingPlan> findByUserIdAndWeekStartOrderByVersionDesc(Long userId, LocalDate weekStart);
+
     Optional<TrainingPlan> findFirstByUserIdAndWeekStartAndStatusOrderByVersionDesc(
             Long userId, LocalDate weekStart, PlanStatus status);
 

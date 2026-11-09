@@ -711,9 +711,13 @@ contrato; el resto de límites (horario, diario y mensual) sigue aplicando.
 | `GET` | `/plans` | Listar planes, con filtro opcional `?from=` y `?to=` (lunes) |
 | `GET` | `/plans/{id}` | Obtener un plan concreto con sus sesiones |
 | `GET` | `/plans/week/{weekStart}` | Plan de una semana (la versión más reciente) |
+| `DELETE` | `/plans/{id}` | Eliminar un plan, sus sesiones y sus jobs de generación |
+| `DELETE` | `/plans/week/{weekStart}` | Eliminar todas las versiones de una semana; devuelve `{deleted}` |
 | `POST` | `/plans/generate` | Encolar la generación de un plan (`202`). Body opcional: `weekStart`, `replace` |
 | `GET` | `/generation-jobs` | Últimos jobs de generación del usuario |
 | `GET` | `/generation-jobs/{requestId}` | Estado de un job (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT`) |
+| `DELETE` | `/generation-jobs/{requestId}` | Eliminar un job (`?force=true` para `RUNNING`); no borra el plan |
+| `DELETE` | `/generation-jobs?status=PENDING` | Eliminar todos los jobs del usuario con ese estado; devuelve `{deleted}` |
 | `GET` | `/preferences` | Preferencias de planificación (`configured=false` si no hay fila) |
 | `PUT` | `/preferences` | Activar generación automática, zona horaria, días/semana, tirada larga y notas |
 
@@ -738,6 +742,53 @@ curl http://localhost:8080/api/v1/training/generation-jobs/<requestId> \
 curl http://localhost:8080/api/v1/training/plans/current \
   -H "Authorization: Bearer <token>"
 ```
+
+#### Limpiar generaciones atascadas
+
+Si un job se quedó en `PENDING` (n8n no respondió), bórralo para desbloquear la semana y poder
+volver a lanzar la generación:
+
+```bash
+# Un job concreto
+curl -X DELETE http://localhost:8080/api/v1/training/generation-jobs/<requestId> \
+  -H "Authorization: Bearer <token>"
+
+# Todos los PENDING del usuario (devuelve {"deleted": n})
+curl -X DELETE "http://localhost:8080/api/v1/training/generation-jobs?status=PENDING" \
+  -H "Authorization: Bearer <token>"
+```
+
+Los jobs `RUNNING` requieren `?force=true`, porque n8n podría estar guardando el plan en ese
+momento. Borrar un job **no elimina el plan** ya persistido; solo quita el registro de correlación.
+Si n8n llama después a `save_weekly_plan` con un `requestId` borrado, recibirá "job no encontrado".
+
+#### Regenerar o borrar planes
+
+Para volver a generar una semana **conservando el histórico**, no hace falta borrar nada: usa
+`replace=true` y la versión anterior queda `ARCHIVED`:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/training/plans/generate \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"weekStart":"2026-11-16","replace":true}'
+```
+
+Si quieres eliminar el plan por completo:
+
+```bash
+# Un plan concreto (una versión)
+curl -i -X DELETE http://localhost:8080/api/v1/training/plans/<planId> \
+  -H "Authorization: Bearer <token>"
+
+# Todas las versiones de la semana (devuelve {"deleted": n})
+curl -X DELETE http://localhost:8080/api/v1/training/plans/week/2026-11-16 \
+  -H "Authorization: Bearer <token>"
+```
+
+Al borrar un plan se eliminan también sus sesiones y los jobs de generación que lo referencian. No
+se reactiva automáticamente una versión archivada anterior: tras el borrado,
+`GET /plans/current` devuelve `204` hasta que generes uno nuevo.
 
 Flujo interno:
 
