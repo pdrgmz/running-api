@@ -13,17 +13,20 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.running.api.dto.ActivityDeletionStatusDto;
 import com.running.api.dto.ErrorResponseDto;
+import com.running.api.dto.MetricsRecalculationResponseDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.security.UserPrincipal;
 import com.running.api.service.ActivityDeletionStatusTracker;
 import com.running.api.service.ActivityService;
+import com.running.api.service.MetricsRecalculationService;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -42,6 +45,7 @@ public class ActivityController {
 
         private final ActivityService activityService;
         private final ActivityDeletionStatusTracker deletionStatusTracker;
+        private final MetricsRecalculationService metricsRecalculationService;
 
         @GetMapping
         @Operation(summary = "Listar las carreras del usuario autenticado", description = "Devuelve una página de actividades ordenada por fecha de inicio descendente. Soporta paginación y ordenación mediante los parámetros page, size y sort.")
@@ -117,6 +121,19 @@ public class ActivityController {
                         return ResponseEntity.notFound().build();
                 }
                 return ResponseEntity.ok(status);
+        }
+
+        @PostMapping("/recalculate-metrics")
+        @Operation(summary = "Recalcular las métricas derivadas de todas las carreras", description = "Recalcula en bloque el training load (TRIMP/HRSS), el VO2Max y la VAM de todas las actividades "
+                        + "del usuario, usando como referencia la FC máxima del atleta. Útil tras corregir la lógica de cálculo "
+                        + "o tras importar un historial antiguo. El proceso es síncrono y puede tardar más con historiales grandes.")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "200", description = "Métricas recalculadas"),
+                        @ApiResponse(responseCode = "401", description = "No autenticado o token inválido", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+        })
+        public ResponseEntity<MetricsRecalculationResponseDto> recalculateMetrics(
+                        @AuthenticationPrincipal UserPrincipal principal) {
+                return ResponseEntity.ok(metricsRecalculationService.recalculateAll(principal.id()));
         }
 
         @DeleteMapping("/{id}")

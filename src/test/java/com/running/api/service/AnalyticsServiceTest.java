@@ -1,5 +1,6 @@
 package com.running.api.service;
 
+import com.running.api.dto.HrZonesResponseDto;
 import com.running.api.dto.SplitDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
@@ -57,6 +58,52 @@ class AnalyticsServiceTest {
         assertThat(splits.stream().mapToDouble(SplitDto::getDistanceMeters).sum()).isEqualTo(10_000.0);
     }
 
+    @Test
+    void calculatesHrZonesAgainstAthleteMaxHeartRateInsteadOfActivityPeak() {
+        // Todas las muestras a 150 ppm. El pico de la actividad es 170, pero la FC máxima
+        // registrada del atleta es 200: 150/200 = 75 % -> Z3. Con el pico de la sesión
+        // (150/170 = 88 %) el mismo rodaje habría aparecido como Z4.
+        Activity activity = Activity.builder()
+                .id(ACTIVITY_ID)
+                .userId(USER_ID)
+                .distanceMeters(5_000.0)
+                .maxHeartRate(170)
+                .trackpoints(buildConstantHeartRateSeries(120, 150))
+                .build();
+
+        ActivityRepository repository = mock(ActivityRepository.class);
+        when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
+        when(repository.findMaxHeartRateByUserId(USER_ID)).thenReturn(200);
+
+        HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
+
+        assertThat(zones.getMaxHrUsed()).isEqualTo(200);
+        assertThat(zones.getZones().getZ3Tempo().getPercentage()).isEqualTo(100.0);
+        assertThat(zones.getZones().getZ4Threshold().getSeconds()).isZero();
+    }
+
+    @Test
+    void ignoresImplausibleHeartRatesAndFallsBackToConfiguredMaxHr() {
+        // Pico de 250 ppm (artefacto del sensor) y sin histórico: se usa el valor por defecto.
+        Activity activity = Activity.builder()
+                .id(ACTIVITY_ID)
+                .userId(USER_ID)
+                .distanceMeters(3_000.0)
+                .maxHeartRate(250)
+                .trackpoints(buildConstantHeartRateSeries(60, 100))
+                .build();
+
+        ActivityRepository repository = mock(ActivityRepository.class);
+        when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
+        when(repository.findMaxHeartRateByUserId(USER_ID)).thenReturn(null);
+
+        HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
+
+        assertThat(zones.getMaxHrUsed()).isEqualTo(185);
+        // 100 / 185 = 54 % -> Z1
+        assertThat(zones.getZones().getZ1Recovery().getPercentage()).isEqualTo(100.0);
+    }
+
     private AnalyticsService serviceWithActivity(double distanceMeters, List<ActivityTrackpoint> points) {
         Activity activity = Activity.builder()
                 .id(ACTIVITY_ID)
@@ -77,6 +124,19 @@ class AnalyticsServiceTest {
                     .distanceMeters(i * metersPerInterval)
                     .timestamp(base.plusSeconds((long) i * secondsPerInterval))
                     .heartRate(150)
+                    .build());
+        }
+        return points;
+    }
+
+    private List<ActivityTrackpoint> buildConstantHeartRateSeries(int count, int heartRate) {
+        LocalDateTime base = LocalDateTime.of(2026, 11, 3, 21, 34, 6);
+        List<ActivityTrackpoint> points = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            points.add(ActivityTrackpoint.builder()
+                    .distanceMeters(i * 2.0)
+                    .timestamp(base.plusSeconds(i))
+                    .heartRate(heartRate)
                     .build());
         }
         return points;

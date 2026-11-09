@@ -47,6 +47,9 @@ public class AnalyticsService {
     private static final double PMC_ATL_DAYS = 7.0;
     private static final int PMC_WARMUP_DAYS = 120;
     private static final double VO2MAX_RECREATIONAL_THRESHOLD = 42.0;
+    private static final int FALLBACK_MAX_HR = 185;
+    private static final int MIN_PLAUSIBLE_MAX_HR = 120;
+    private static final int MAX_PLAUSIBLE_MAX_HR = 230;
 
     private final ActivityRepository activityRepository;
 
@@ -178,19 +181,25 @@ public class AnalyticsService {
         Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
-        int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
+        // La referencia es la FC máxima del atleta, no el pico de esta sesión: si se usa el
+        // máximo de la actividad, todas las muestras se comprimen hacia las zonas altas y un
+        // rodaje suave acaba mostrándose como Z4/Z5.
+        int maxHr = resolveAthleteMaxHr(userId, activity.getMaxHeartRate());
 
         int z1 = 0, z2 = 0, z3 = 0, z4 = 0, z5 = 0;
 
-        for (ActivityTrackpoint pt : activity.getTrackpoints()) {
-            if (pt.getHeartRate() == null || pt.getHeartRate() == 0) continue;
-            double pct = (double) pt.getHeartRate() / maxHr;
+        List<ActivityTrackpoint> points = activity.getTrackpoints();
+        if (points != null) {
+            for (ActivityTrackpoint pt : points) {
+                if (pt.getHeartRate() == null || pt.getHeartRate() == 0) continue;
+                double pct = (double) pt.getHeartRate() / maxHr;
 
-            if (pct < 0.60) z1++;
-            else if (pct < 0.70) z2++;
-            else if (pct < 0.80) z3++;
-            else if (pct < 0.90) z4++;
-            else z5++;
+                if (pct < 0.60) z1++;
+                else if (pct < 0.70) z2++;
+                else if (pct < 0.80) z3++;
+                else if (pct < 0.90) z4++;
+                else z5++;
+            }
         }
 
         int total = z1 + z2 + z3 + z4 + z5;
@@ -207,6 +216,41 @@ public class AnalyticsService {
                 .maxHrUsed(maxHr)
                 .zones(map)
                 .build();
+    }
+
+    /**
+     * FC máxima de referencia del atleta.
+     *
+     * <p>Las zonas y las métricas derivadas del pulso deben calcularse contra la FC máxima
+     * del atleta, no contra el pico de cada sesión: usar el máximo de la actividad comprime
+     * todas las muestras hacia las zonas altas y hace que un rodaje suave parezca Z4/Z5.
+     *
+     * <p>Se toma el mayor valor plausible registrado en las actividades del usuario, más el
+     * pico de la actividad en curso cuando todavía no está persistida. Si no hay ningún dato
+     * válido se usa la propiedad {@code app.user.max-hr}.
+     *
+     * @param userId    propietario de las actividades (puede ser {@code null} en cálculos aislados)
+     * @param activityMaxHr pico de la actividad que se está analizando (opcional)
+     * @return FC máxima de referencia en bpm, siempre dentro de un rango fisiológico plausible
+     */
+    public int resolveAthleteMaxHr(Long userId, Integer activityMaxHr) {
+        int best = 0;
+        Integer observed = userId != null ? activityRepository.findMaxHeartRateByUserId(userId) : null;
+        if (isPlausibleMaxHr(observed)) {
+            best = observed;
+        }
+        if (isPlausibleMaxHr(activityMaxHr) && activityMaxHr > best) {
+            best = activityMaxHr;
+        }
+        return best > 0 ? best : configuredMaxHr();
+    }
+
+    private boolean isPlausibleMaxHr(Integer hr) {
+        return hr != null && hr >= MIN_PLAUSIBLE_MAX_HR && hr <= MAX_PLAUSIBLE_MAX_HR;
+    }
+
+    private int configuredMaxHr() {
+        return defaultMaxHr != null && defaultMaxHr > 0 ? defaultMaxHr : FALLBACK_MAX_HR;
     }
 
     // 3. Cardiac Drift (Desacople Aeróbico) con guardas contra división por cero
@@ -273,8 +317,13 @@ public class AnalyticsService {
     }
 
     public TrainingLoadResponseDto computeTrainingLoadDetails(Activity activity) {
+        return computeTrainingLoadDetails(activity,
+                resolveAthleteMaxHr(activity.getUserId(), activity.getMaxHeartRate()));
+    }
+
+    public TrainingLoadResponseDto computeTrainingLoadDetails(Activity activity, int athleteMaxHr) {
         List<ActivityTrackpoint> trackpoints = activity.getTrackpoints();
-        int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
+        int maxHr = athleteMaxHr;
         int restHr = RESTING_HEART_RATE;
 
         double edwardsTrimp = 0.0;
@@ -346,8 +395,13 @@ public class AnalyticsService {
     }
 
     public Vo2MaxVamResponseDto computeVo2MaxAndVamDetails(Activity activity) {
+        return computeVo2MaxAndVamDetails(activity,
+                resolveAthleteMaxHr(activity.getUserId(), activity.getMaxHeartRate()));
+    }
+
+    public Vo2MaxVamResponseDto computeVo2MaxAndVamDetails(Activity activity, int athleteMaxHr) {
         List<ActivityTrackpoint> trackpoints = activity.getTrackpoints();
-        int maxHr = activity.getMaxHeartRate() != null ? activity.getMaxHeartRate() : defaultMaxHr;
+        int maxHr = athleteMaxHr;
         int restHr = RESTING_HEART_RATE;
 
         Double estimatedVo2Max = null;
@@ -478,15 +532,21 @@ public class AnalyticsService {
             modified = true;
         }
 
+        Integer athleteMaxHr = null;
+
         if (activity.getTrainingLoad() == null) {
-            TrainingLoadResponseDto tlDetails = computeTrainingLoadDetails(activity);
+            athleteMaxHr = resolveAthleteMaxHr(activity.getUserId(), activity.getMaxHeartRate());
+            TrainingLoadResponseDto tlDetails = computeTrainingLoadDetails(activity, athleteMaxHr);
             Double tl = tlDetails.getTrainingLoad();
             activity.setTrainingLoad(tl);
             modified = true;
         }
 
         if (activity.getVo2MaxEstimated() == null || activity.getVamKmH() == null) {
-            Vo2MaxVamResponseDto vo2Details = computeVo2MaxAndVamDetails(activity);
+            if (athleteMaxHr == null) {
+                athleteMaxHr = resolveAthleteMaxHr(activity.getUserId(), activity.getMaxHeartRate());
+            }
+            Vo2MaxVamResponseDto vo2Details = computeVo2MaxAndVamDetails(activity, athleteMaxHr);
             Double vo2 = vo2Details.getVo2MaxEstimated();
             Double vam = vo2Details.getVamKmH();
             activity.setVo2MaxEstimated(vo2);

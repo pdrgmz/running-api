@@ -480,6 +480,7 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | `DELETE` | `/{id}` | Eliminar actividad por ID |
 | `DELETE` | `/` | Vaciar toda la base (asíncrono; devuelve `202` con un `deleteId`) |
 | `GET` | `/delete-status/{deleteId}` | Consultar el progreso del vaciado |
+| `POST` | `/recalculate-metrics` | Recalcular training load, VO2Max y VAM de todas las actividades con la FC máx del atleta |
 
 ### Actividades globales (`/api/v1/activities`)
 
@@ -612,7 +613,7 @@ contrato; el resto de límites (horario, diario y mensual) sigue aplicando.
 | Método | Path | Descripción |
 |--------|------|-------------|
 | `GET` | `/{id}/splits` | Splits por kilómetro |
-| `GET` | `/{id}/hr-zones` | Zonas de frecuencia cardíaca |
+| `GET` | `/{id}/hr-zones` | Zonas de frecuencia cardíaca (referenciadas a la FC máx del atleta, no al pico de la actividad) |
 | `GET` | `/{id}/cardiac-drift` | Desacople aeróbico |
 | `GET` | `/{id}/training-load` | Carga de entrenamiento |
 | `GET` | `/{id}/vo2max-vam` | VO2Max y VAM |

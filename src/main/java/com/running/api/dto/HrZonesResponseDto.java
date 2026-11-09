@@ -13,7 +13,7 @@ import lombok.NoArgsConstructor;
 @Schema(description = "Respuesta del análisis de distribución de tiempo en zonas de frecuencia cardíaca")
 public class HrZonesResponseDto {
 
-    @Schema(description = "Frecuencia cardíaca máxima utilizada como referencia", example = "185")
+    @Schema(description = "Frecuencia cardíaca máxima del atleta utilizada como referencia (no el pico de la actividad)", example = "195")
     private Integer maxHrUsed;
 
     @Schema(description = "Zonas de frecuencia cardíaca Z1 a Z5")
