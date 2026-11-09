@@ -77,7 +77,7 @@
 - **VO2Max y VAM** — Estimaciones fisiológicas
 - **PMC (Performance Management Chart)** — CTL, ATL, TSB con histórico
 - **Número de Eddington** — Métrica de consistencia de carreras
-- **ACWR** — Acute:Chronic Workload Ratio con evaluación de riesgo de lesión
+- **ACWR** — Acute:Chronic Workload Ratio 7:28 con evaluación de riesgo de lesión
 
 ### Exportación Geoespacial
 - **GeoJSON** — FeatureCollection con la ruta GPS
