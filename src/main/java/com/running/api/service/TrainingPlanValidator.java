@@ -5,7 +5,6 @@ import com.running.api.dto.WeeklyPlanPayload;
 import com.running.api.dto.WeeklyPlanPayload.PlannedWorkoutPayload;
 import com.running.api.exception.PlanValidationException;
 import com.running.api.model.WorkoutType;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
@@ -27,16 +26,7 @@ public class TrainingPlanValidator {
             "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY");
     private static final int MAX_WORKOUTS_PER_WEEK = 7;
 
-    private final double maxWeeklyIncreasePercent;
-
-    public TrainingPlanValidator(
-            @Value("${app.training.plan.max-weekly-increase-percent:25}") double maxWeeklyIncreasePercent) {
-        this.maxWeeklyIncreasePercent = Math.max(0.0, maxWeeklyIncreasePercent);
-    }
-
-    public void validate(LocalDate weekStart,
-                         WeeklyPlanPayload payload,
-                         Double previousFourWeekAverageDistanceMeters) {
+    public void validate(LocalDate weekStart, WeeklyPlanPayload payload) {
         List<PlanViolationDto> violations = new ArrayList<>();
 
         if (weekStart == null) {
@@ -58,9 +48,7 @@ public class TrainingPlanValidator {
                     "El plan no puede tener más de " + MAX_WORKOUTS_PER_WEEK + " sesiones"));
         }
 
-        double sumDistanceMeters = 0.0;
-        Set<LocalDate> seenDates = new HashSet<>();
-        if (payload.workouts() != null) {
+        Set<LocalDate> seenDates = new HashSet<>();        if (payload.workouts() != null) {
             for (int i = 0; i < payload.workouts().size(); i++) {
                 PlannedWorkoutPayload workout = payload.workouts().get(i);
                 String prefix = "workouts[" + i + "]";
@@ -92,13 +80,9 @@ public class TrainingPlanValidator {
                 if (workout.title() == null || workout.title().isBlank()) {
                     violations.add(v("WORKOUT_TITLE_REQUIRED", prefix + ".title es obligatorio"));
                 }
-                if (workout.targetDistanceMeters() != null) {
-                    if (workout.targetDistanceMeters() < 0) {
-                        violations.add(v("NEGATIVE_WORKOUT_DISTANCE",
-                                prefix + ".targetDistanceMeters no puede ser negativo"));
-                    } else {
-                        sumDistanceMeters += workout.targetDistanceMeters();
-                    }
+                if (workout.targetDistanceMeters() != null && workout.targetDistanceMeters() < 0) {
+                    violations.add(v("NEGATIVE_WORKOUT_DISTANCE",
+                            prefix + ".targetDistanceMeters no puede ser negativo"));
                 }
                 if (workout.targetDurationSeconds() != null && workout.targetDurationSeconds() < 0) {
                     violations.add(v("NEGATIVE_WORKOUT_DURATION",
@@ -127,25 +111,6 @@ public class TrainingPlanValidator {
         }
         if (payload.targetWeeklyLoad() != null && payload.targetWeeklyLoad() < 0) {
             violations.add(v("NEGATIVE_WEEKLY_LOAD", "targetWeeklyLoad no puede ser negativo"));
-        }
-
-        double targetDistance = payload.targetWeeklyDistanceMeters() != null
-                ? payload.targetWeeklyDistanceMeters()
-                : sumDistanceMeters;
-
-        // Regla de progresión: no aumentar más del porcentaje configurado sobre la
-        // media de las últimas 4 semanas. Evita planes agresivos que disparen el ACWR.
-        if (previousFourWeekAverageDistanceMeters != null
-                && previousFourWeekAverageDistanceMeters > 0
-                && targetDistance > 0) {
-            double limit = previousFourWeekAverageDistanceMeters * (1.0 + maxWeeklyIncreasePercent / 100.0);
-            if (targetDistance > limit) {
-                violations.add(v("WEEKLY_INCREASE_TOO_HIGH", String.format(Locale.ROOT,
-                        "El volumen semanal (%.0f m) supera en más del %.0f%% la media de las últimas "
-                                + "4 semanas (%.0f m). Máximo permitido: %.0f m.",
-                        targetDistance, maxWeeklyIncreasePercent,
-                        previousFourWeekAverageDistanceMeters, limit)));
-            }
         }
 
         if (!violations.isEmpty()) {

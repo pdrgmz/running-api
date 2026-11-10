@@ -17,7 +17,7 @@ class TrainingPlanValidatorTest {
 
     private static final LocalDate MONDAY = LocalDate.of(2026, 11, 16);
 
-    private final TrainingPlanValidator validator = new TrainingPlanValidator(25.0);
+    private final TrainingPlanValidator validator = new TrainingPlanValidator();
 
     private WeeklyPlanPayload validPlan() {
         return new WeeklyPlanPayload(
@@ -38,13 +38,13 @@ class TrainingPlanValidatorTest {
 
     @Test
     void acceptsAValidPlan() {
-        assertThatCode(() -> validator.validate(MONDAY, validPlan(), 20000.0))
+        assertThatCode(() -> validator.validate(MONDAY, validPlan()))
                 .doesNotThrowAnyException();
     }
 
     @Test
     void rejectsWeekStartThatIsNotMonday() {
-        assertThatThrownBy(() -> validator.validate(MONDAY.plusDays(1), validPlan(), null))
+        assertThatThrownBy(() -> validator.validate(MONDAY.plusDays(1), validPlan()))
                 .isInstanceOf(PlanValidationException.class)
                 .satisfies(ex -> assertThat(((PlanValidationException) ex).getViolations())
                         .extracting(v -> v.code())
@@ -59,7 +59,7 @@ class TrainingPlanValidatorTest {
                         "Fuera", null, 5000.0, null, null, null, null, null)),
                 null, null);
 
-        assertThatThrownBy(() -> validator.validate(MONDAY, payload, null))
+        assertThatThrownBy(() -> validator.validate(MONDAY, payload))
                 .isInstanceOf(PlanValidationException.class)
                 .satisfies(ex -> assertThat(((PlanValidationException) ex).getViolations())
                         .extracting(v -> v.code())
@@ -77,7 +77,7 @@ class TrainingPlanValidatorTest {
                                 5000.0, null, null, null, null, null)),
                 null, null);
 
-        assertThatThrownBy(() -> validator.validate(MONDAY, payload, null))
+        assertThatThrownBy(() -> validator.validate(MONDAY, payload))
                 .isInstanceOf(PlanValidationException.class)
                 .satisfies(ex -> assertThat(((PlanValidationException) ex).getViolations())
                         .extracting(v -> v.code())
@@ -87,22 +87,11 @@ class TrainingPlanValidatorTest {
     }
 
     @Test
-    void rejectsWeeklyVolumeIncreaseAboveConfiguredLimit() {
-        // El plan declara 24 km; la media de las 4 semanas anteriores es 10 km.
-        // Con un máximo del 25 %, el límite son 12,5 km.
-        assertThatThrownBy(() -> validator.validate(MONDAY, validPlan(), 10000.0))
-                .isInstanceOf(PlanValidationException.class)
-                .satisfies(ex -> assertThat(((PlanValidationException) ex).getViolations())
-                        .extracting(v -> v.code())
-                        .contains("WEEKLY_INCREASE_TOO_HIGH"));
-    }
-
-    @Test
     void rejectsEmptyPlan() {
         WeeklyPlanPayload payload = new WeeklyPlanPayload(
                 null, null, null, null, List.of(), null, null);
 
-        assertThatThrownBy(() -> validator.validate(MONDAY, payload, null))
+        assertThatThrownBy(() -> validator.validate(MONDAY, payload))
                 .isInstanceOf(PlanValidationException.class)
                 .satisfies(ex -> assertThat(((PlanValidationException) ex).getViolations())
                         .extracting(v -> v.code())

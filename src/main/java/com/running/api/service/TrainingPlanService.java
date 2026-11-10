@@ -14,7 +14,6 @@ import com.running.api.exception.PlanAlreadyExistsException;
 import com.running.api.exception.PlanJobStateException;
 import com.running.api.exception.PlanValidationException;
 import com.running.api.exception.ResourceNotFoundException;
-import com.running.api.model.Activity;
 import com.running.api.model.PlanGenerationJob;
 import com.running.api.model.PlanStatus;
 import com.running.api.model.PlannedWorkout;
@@ -23,7 +22,6 @@ import com.running.api.model.TrainingJobStatus;
 import com.running.api.model.TrainingPlan;
 import com.running.api.model.TrainingPreferences;
 import com.running.api.model.WorkoutStatus;
-import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.PlanGenerationJobRepository;
 import com.running.api.repository.TrainingPlanRepository;
 import com.running.api.repository.TrainingPreferencesRepository;
@@ -38,12 +36,8 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -58,7 +52,6 @@ public class TrainingPlanService {
     private final TrainingPlanRepository planRepository;
     private final PlanGenerationJobRepository jobRepository;
     private final TrainingPreferencesRepository preferencesRepository;
-    private final ActivityRepository activityRepository;
     private final TrainingPlanValidator validator;
     private final ObjectMapper objectMapper;
 
@@ -201,8 +194,7 @@ public class TrainingPlanService {
         job.setAttempts(job.getAttempts() == null ? 1 : job.getAttempts() + 1);
         job.setUpdatedAt(LocalDateTime.now());
 
-        Double previousAverage = previousFourWeekAverageDistanceMeters(userId, effectiveWeekStart);
-        validator.validate(effectiveWeekStart, payload, previousAverage);
+        validator.validate(effectiveWeekStart, payload);
 
         Optional<TrainingPlan> activePlan = planRepository
                 .findFirstByUserIdAndWeekStartAndStatusOrderByVersionDesc(
@@ -584,34 +576,6 @@ public class TrainingPlanService {
                 job.getCreatedAt(),
                 job.getUpdatedAt(),
                 job.getCompletedAt());
-    }
-
-    /**
-     * Media de distancia de las últimas 4 semanas con actividad antes de la
-     * semana planificada. Se usa para limitar aumentos bruscos de volumen.
-     */
-    private Double previousFourWeekAverageDistanceMeters(Long userId, LocalDate weekStart) {
-        LocalDate from = weekStart.minusWeeks(4);
-        LocalDate to = weekStart.minusDays(1);
-        List<Activity> activities = activityRepository
-                .findByUserIdAndStartTimeBetweenOrderByStartTimeAsc(
-                        userId, from.atStartOfDay(), to.atTime(23, 59, 59));
-        if (activities.isEmpty()) {
-            return null;
-        }
-        Map<LocalDate, Double> perWeek = new LinkedHashMap<>();
-        for (Activity activity : activities) {
-            if (activity.getStartTime() == null) {
-                continue;
-            }
-            LocalDate week = TrainingWeekUtils.normalizeToMonday(activity.getStartTime().toLocalDate());
-            double distance = activity.getDistanceMeters() == null ? 0.0 : activity.getDistanceMeters();
-            perWeek.merge(week, distance, Double::sum);
-        }
-        if (perWeek.isEmpty()) {
-            return null;
-        }
-        return perWeek.values().stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
     }
 
     private static String truncate(String value, int max) {

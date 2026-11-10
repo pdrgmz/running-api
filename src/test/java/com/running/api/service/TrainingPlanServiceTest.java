@@ -14,7 +14,6 @@ import com.running.api.model.TrainingJobSource;
 import com.running.api.model.TrainingJobStatus;
 import com.running.api.model.TrainingPlan;
 import com.running.api.model.WorkoutType;
-import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.PlanGenerationJobRepository;
 import com.running.api.repository.TrainingPlanRepository;
 import com.running.api.repository.TrainingPreferencesRepository;
@@ -32,7 +31,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -50,8 +48,6 @@ class TrainingPlanServiceTest {
     private PlanGenerationJobRepository jobRepository;
     @Mock
     private TrainingPreferencesRepository preferencesRepository;
-    @Mock
-    private ActivityRepository activityRepository;
 
     private TrainingPlanService service;
 
@@ -61,8 +57,7 @@ class TrainingPlanServiceTest {
                 planRepository,
                 jobRepository,
                 preferencesRepository,
-                activityRepository,
-                new TrainingPlanValidator(25.0),
+                new TrainingPlanValidator(),
                 new ObjectMapper());
     }
 
@@ -70,8 +65,6 @@ class TrainingPlanServiceTest {
     void savesPlanAndCompletesJobInTheSameOperation() {
         PlanGenerationJob job = job(TrainingJobStatus.PENDING);
         when(jobRepository.findByIdAndUserId(REQUEST_ID, USER_ID)).thenReturn(Optional.of(job));
-        when(activityRepository.findByUserIdAndStartTimeBetweenOrderByStartTimeAsc(
-                eq(USER_ID), any(), any())).thenReturn(List.of());
         when(planRepository.findFirstByUserIdAndWeekStartAndStatusOrderByVersionDesc(
                 USER_ID, MONDAY, PlanStatus.ACTIVE)).thenReturn(Optional.empty());
         when(planRepository.findFirstByUserIdAndWeekStartOrderByVersionDesc(USER_ID, MONDAY))
@@ -114,8 +107,6 @@ class TrainingPlanServiceTest {
         PlanGenerationJob job = job(TrainingJobStatus.PENDING);
         TrainingPlan existing = plan(1, PlanStatus.ACTIVE);
         when(jobRepository.findByIdAndUserId(REQUEST_ID, USER_ID)).thenReturn(Optional.of(job));
-        when(activityRepository.findByUserIdAndStartTimeBetweenOrderByStartTimeAsc(
-                eq(USER_ID), any(), any())).thenReturn(List.of());
         when(planRepository.findFirstByUserIdAndWeekStartAndStatusOrderByVersionDesc(
                 USER_ID, MONDAY, PlanStatus.ACTIVE)).thenReturn(Optional.of(existing));
 
@@ -129,8 +120,6 @@ class TrainingPlanServiceTest {
         PlanGenerationJob job = job(TrainingJobStatus.PENDING);
         TrainingPlan existing = plan(1, PlanStatus.ACTIVE);
         when(jobRepository.findByIdAndUserId(REQUEST_ID, USER_ID)).thenReturn(Optional.of(job));
-        when(activityRepository.findByUserIdAndStartTimeBetweenOrderByStartTimeAsc(
-                eq(USER_ID), any(), any())).thenReturn(List.of());
         when(planRepository.findFirstByUserIdAndWeekStartAndStatusOrderByVersionDesc(
                 USER_ID, MONDAY, PlanStatus.ACTIVE)).thenReturn(Optional.of(existing));
         when(planRepository.findFirstByUserIdAndWeekStartOrderByVersionDesc(USER_ID, MONDAY))

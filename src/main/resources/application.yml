@@ -90,7 +90,6 @@ app:
       job-timeout-minutes: ${APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES:60}
       reconcile-cron: ${APP_TRAINING_PLAN_RECONCILE_CRON:0 */10 * * * *}
       webhook-timeout-seconds: ${APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS:20}
-      max-weekly-increase-percent: ${APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT:25}
 
 springdoc:
   api-docs:

@@ -314,7 +314,7 @@ corrija y reintente **con el mismo `requestId`**:
     "content": [
       {
         "type": "text",
-        "text": "{\"ok\":false,\"code\":\"PLAN_INVALID\",\"violations\":[{\"code\":\"WEEKLY_INCREASE_TOO_HIGH\",\"message\":\"...\"}],\"hint\":\"Corrige las violaciones y vuelve a llamar a save_weekly_plan con el mismo requestId.\"}"
+        "text": "{\"ok\":false,\"code\":\"PLAN_INVALID\",\"violations\":[{\"code\":\"PACE_OUT_OF_RANGE\",\"message\":\"...\"}],\"hint\":\"Corrige las violaciones y vuelve a llamar a save_weekly_plan con el mismo requestId.\"}"
       }
     ]
   }

@@ -85,8 +85,6 @@
 - **Contexto del atleta por MCP** (`get_training_context`): resumen, ACWR, últimas 4 semanas,
   actividades recientes, marcas personales y plan actual
 - **La API es la fuente de verdad**: valida y persiste el plan (`save_weekly_plan`) antes de que exista
-- **Reglas de seguridad de carga**: el volumen semanal no puede superar en más de un 25 % la media
-  de las últimas 4 semanas
 - **Preferencias por atleta**: activación, zona horaria, días por semana, día de tirada larga y notas
 - **Versionado e idempotencia**: regenerar archiva el plan anterior; los reintentos de n8n devuelven
   el mismo plan sin duplicarlo
@@ -281,7 +279,6 @@ src/main/java/com/running/api/
 | `APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES` | `60` | Tras este tiempo, un job `PENDING`/`RUNNING` pasa a `TIMEOUT` |
 | `APP_TRAINING_PLAN_RECONCILE_CRON` | `0 */10 * * * *` | Cron de reconciliación de jobs caducados |
 | `APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS` | `20` | Timeout de la llamada de la API al webhook (no espera al LLM) |
-| `APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT` | `25` | Incremento máximo del volumen semanal sobre la media de 4 semanas |
 
 > `APP_TRAINING_PLAN_MCP_URL` se resuelve **desde el contenedor/host de n8n**, no desde la API. Si
 > n8n no comparte red con la API, `http://localhost:8080/mcp` y `http://running-api:8080/mcp` no
@@ -349,7 +346,6 @@ app:
       job-timeout-minutes: ${APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES:60}
       reconcile-cron: ${APP_TRAINING_PLAN_RECONCILE_CRON:0 */10 * * * *}
       webhook-timeout-seconds: ${APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS:20}
-      max-weekly-increase-percent: ${APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT:25}
 ```
 
 ---
@@ -805,8 +801,6 @@ Reglas destacadas:
 
 - `weekStart` debe ser **lunes** y coincidir con la semana del job.
 - Sin `replace=true`, un plan ya existente devuelve `409 PLAN_EXISTS`.
-- Un plan válido no puede superar en más de `APP_TRAINING_PLAN_MAX_WEEKLY_INCREASE_PERCENT`
-  (25 % por defecto) la media de las últimas 4 semanas.
 - Los días de descanso se representan **omitiendo la sesión** (no se admite el tipo `REST`).
 - Los reintentos con el mismo `requestId` son idempotentes: devuelven el plan ya guardado.
 
