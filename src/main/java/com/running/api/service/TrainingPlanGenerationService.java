@@ -7,6 +7,7 @@ import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.PlanGenerationJob;
 import com.running.api.model.TrainingJobSource;
 import com.running.api.model.User;
+import com.running.api.repository.PlanGenerationJobRepository;
 import com.running.api.repository.UserRepository;
 import com.running.api.security.JwtService;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 /**
  * Orquesta la creación del job, la firma del JWT efímero y el disparo del
@@ -29,11 +31,31 @@ public class TrainingPlanGenerationService {
 
     private final TrainingPlanService trainingPlanService;
     private final N8nPlanWebhookClient webhookClient;
+    private final PlanGenerationJobRepository jobRepository;
     private final UserRepository userRepository;
     private final JwtService jwtService;
 
     @Value("${app.training.plan.token-ttl-minutes:45}")
     private long tokenTtlMinutes;
+
+    @Value("${app.training.plan.max-attempts:3}")
+    private int maxAttempts;
+
+    @Value("${app.training.plan.retry-backoff-millis:2000}")
+    private long retryBackoffMillis;
+
+    public TrainingPlanGenerationService(
+            TrainingPlanService trainingPlanService,
+            N8nPlanWebhookClient webhookClient,
+            PlanGenerationJobRepository jobRepository,
+            UserRepository userRepository,
+            JwtService jwtService) {
+        this.trainingPlanService = trainingPlanService;
+        this.webhookClient = webhookClient;
+        this.jobRepository = jobRepository;
+        this.userRepository = userRepository;
+        this.jwtService = jwtService;
+    }
 
     public GenerateTrainingPlanResponseDto generateNow(Long userId, LocalDate weekStart, boolean replace) {
         PlanGenerationJob job = trainingPlanService.createJob(
@@ -64,19 +86,46 @@ public class TrainingPlanGenerationService {
                         "Usuario no encontrado: " + job.getUserId()));
         String token = jwtService.generatePlanGenerationToken(
                 user, job.getId(), Duration.ofMinutes(Math.max(5, tokenTtlMinutes)));
-        try {
-            webhookClient.trigger(token, job.getId(), job.getWeekStart(), replace);
-        } catch (RuntimeException ex) {
+
+        RuntimeException lastEx = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            // Persistir el intento antes de llamar al webhook
+            job.setAttempts(attempt);
+            job.setUpdatedAt(LocalDateTime.now());
+            jobRepository.save(job);
+
             try {
-                trainingPlanService.failJob(job.getUserId(), job.getId(), ex.getMessage());
-            } catch (Exception failEx) {
-                log.warn("No se pudo marcar como FAILED el job {}: {}", job.getId(), failEx.getMessage());
+                webhookClient.trigger(token, job.getId(), job.getWeekStart(), replace);
+                log.info("Job de plan enviado a n8n (intento {}/{}): requestId={}",
+                        attempt, maxAttempts, job.getId());
+                return; // éxito
+            } catch (RuntimeException ex) {
+                lastEx = ex;
+                log.warn("Intento {}/{} falló para el job {}: {}",
+                        attempt, maxAttempts, job.getId(), ex.getMessage());
+                if (attempt < maxAttempts && retryBackoffMillis > 0) {
+                    try {
+                        Thread.sleep(retryBackoffMillis);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
             }
-            if (ex instanceof PlanGenerationException generationException) {
-                throw generationException;
-            }
-            throw new PlanGenerationException("No se pudo disparar la generación del plan: "
-                    + ex.getMessage(), ex);
         }
+
+        // Agotados los reintentos: marcar el job como FAILED
+        try {
+            trainingPlanService.failJob(job.getUserId(), job.getId(),
+                    lastEx != null ? lastEx.getMessage() : "Error desconocido");
+        } catch (Exception failEx) {
+            log.warn("No se pudo marcar como FAILED el job {}: {}", job.getId(), failEx.getMessage());
+        }
+        if (lastEx instanceof PlanGenerationException generationException) {
+            throw generationException;
+        }
+        throw new PlanGenerationException("No se pudo disparar la generación del plan tras "
+                + maxAttempts + " intentos: "
+                + (lastEx != null ? lastEx.getMessage() : "error desconocido"), lastEx);
     }
 }

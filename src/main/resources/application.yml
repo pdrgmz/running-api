@@ -88,6 +88,9 @@ app:
       mcp-url: ${APP_TRAINING_PLAN_MCP_URL:http://localhost:8080/mcp}
       token-ttl-minutes: ${APP_TRAINING_PLAN_TOKEN_TTL_MINUTES:45}
       job-timeout-minutes: ${APP_TRAINING_PLAN_JOB_TIMEOUT_MINUTES:60}
+      # Reintentos del webhook de n8n al crear un job programado (cron).
+      max-attempts: ${APP_TRAINING_PLAN_MAX_ATTEMPTS:3}
+      retry-backoff-millis: ${APP_TRAINING_PLAN_RETRY_BACKOFF_MILLIS:2000}
       reconcile-cron: ${APP_TRAINING_PLAN_RECONCILE_CRON:0 */10 * * * *}
       webhook-timeout-seconds: ${APP_TRAINING_PLAN_WEBHOOK_TIMEOUT_SECONDS:20}
 

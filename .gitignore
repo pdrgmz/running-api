@@ -23,3 +23,6 @@
 .DS_Store
 Thumbs.db
 opencode.json
+.vscode/launch.json
+opencode.json
+opencode.json
