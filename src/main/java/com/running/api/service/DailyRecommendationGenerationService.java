@@ -1,16 +1,15 @@
 package com.running.api.service;
 
-import com.running.api.dto.GenerateTrainingPlanResponseDto;
-import com.running.api.dto.PlanGenerationJobResponseDto;
-import com.running.api.exception.PlanGenerationException;
+import com.running.api.dto.DailyGenerationJobResponseDto;
+import com.running.api.dto.GenerateDailyRecommendationResponseDto;
+import com.running.api.exception.GenerationException;
 import com.running.api.exception.ResourceNotFoundException;
-import com.running.api.model.PlanGenerationJob;
+import com.running.api.model.DailyGenerationJob;
 import com.running.api.model.TrainingJobSource;
 import com.running.api.model.User;
-import com.running.api.repository.PlanGenerationJobRepository;
+import com.running.api.repository.DailyGenerationJobRepository;
 import com.running.api.repository.UserRepository;
 import com.running.api.security.JwtService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -18,73 +17,74 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 
 /**
  * Orquesta la creación del job, la firma del JWT efímero y el disparo del
  * webhook de n8n. El guardado real lo hará n8n llamando a
- * {@code save_weekly_plan} en el MCP.
+ * {@code save_daily_recommendation} en el MCP.
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
-public class TrainingPlanGenerationService {
+public class DailyRecommendationGenerationService {
 
-    private final TrainingPlanService trainingPlanService;
-    private final N8nPlanWebhookClient webhookClient;
-    private final PlanGenerationJobRepository jobRepository;
+    private final DailyRecommendationService recommendationService;
+    private final N8nDailyWebhookClient webhookClient;
+    private final DailyGenerationJobRepository jobRepository;
     private final UserRepository userRepository;
     private final JwtService jwtService;
+    private final long tokenTtlMinutes;
+    private final int maxAttempts;
+    private final long retryBackoffMillis;
 
-    @Value("${app.training.plan.token-ttl-minutes:45}")
-    private long tokenTtlMinutes;
-
-    @Value("${app.training.plan.max-attempts:3}")
-    private int maxAttempts;
-
-    @Value("${app.training.plan.retry-backoff-millis:2000}")
-    private long retryBackoffMillis;
-
-    public TrainingPlanGenerationService(
-            TrainingPlanService trainingPlanService,
-            N8nPlanWebhookClient webhookClient,
-            PlanGenerationJobRepository jobRepository,
+    public DailyRecommendationGenerationService(
+            DailyRecommendationService recommendationService,
+            N8nDailyWebhookClient webhookClient,
+            DailyGenerationJobRepository jobRepository,
             UserRepository userRepository,
-            JwtService jwtService) {
-        this.trainingPlanService = trainingPlanService;
+            JwtService jwtService,
+            @Value("${app.training.daily.token-ttl-minutes:45}") long tokenTtlMinutes,
+            @Value("${app.training.daily.max-attempts:3}") int maxAttempts,
+            @Value("${app.training.daily.retry-backoff-millis:2000}") long retryBackoffMillis) {
+        this.recommendationService = recommendationService;
         this.webhookClient = webhookClient;
         this.jobRepository = jobRepository;
         this.userRepository = userRepository;
         this.jwtService = jwtService;
+        this.tokenTtlMinutes = tokenTtlMinutes;
+        this.maxAttempts = Math.max(1, maxAttempts);
+        this.retryBackoffMillis = retryBackoffMillis;
     }
 
-    public GenerateTrainingPlanResponseDto generateNow(Long userId, LocalDate weekStart, boolean replace) {
-        PlanGenerationJob job = trainingPlanService.createJob(
-                userId, weekStart, replace, TrainingJobSource.MANUAL);
+    public GenerateDailyRecommendationResponseDto generateNow(Long userId, LocalDate date, boolean replace) {
+        LocalDate effectiveDate = date == null ? LocalDate.now(recommendationService.zoneFor(userId)) : date;
+        DailyGenerationJob job = recommendationService.createJob(
+                userId, effectiveDate, replace, TrainingJobSource.MANUAL);
         trigger(job, replace);
-        return new GenerateTrainingPlanResponseDto(
+        return new GenerateDailyRecommendationResponseDto(
                 job.getId(),
-                job.getWeekStart(),
+                job.getRecommendationDate(),
                 job.getStatus(),
                 "Generación encolada. Consulta el estado en /api/v1/training/generation-jobs/"
                         + job.getId());
     }
 
-    public PlanGenerationJob createScheduledJob(Long userId, LocalDate weekStart) {
-        PlanGenerationJob job = trainingPlanService.createJob(
-                userId, weekStart, false, TrainingJobSource.SCHEDULED);
+    public DailyGenerationJob createScheduledJob(Long userId, LocalDate date) {
+        DailyGenerationJob job = recommendationService.createJob(
+                userId, date, false, TrainingJobSource.SCHEDULED);
         trigger(job, false);
         return job;
     }
 
-    public PlanGenerationJobResponseDto getJob(Long userId, String requestId) {
-        return trainingPlanService.getJob(userId, requestId);
+    public DailyGenerationJobResponseDto getJob(Long userId, String requestId) {
+        return recommendationService.getJob(userId, requestId);
     }
 
-    private void trigger(PlanGenerationJob job, boolean replace) {
+    private void trigger(DailyGenerationJob job, boolean replace) {
         User user = userRepository.findById(job.getUserId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Usuario no encontrado: " + job.getUserId()));
-        String token = jwtService.generatePlanGenerationToken(
+        String token = jwtService.generateGenerationToken(
                 user, job.getId(), Duration.ofMinutes(Math.max(5, tokenTtlMinutes)));
 
         RuntimeException lastEx = null;
@@ -95,8 +95,8 @@ public class TrainingPlanGenerationService {
             jobRepository.save(job);
 
             try {
-                webhookClient.trigger(token, job.getId(), job.getWeekStart(), replace);
-                log.info("Job de plan enviado a n8n (intento {}/{}): requestId={}",
+                webhookClient.trigger(token, job.getId(), job.getRecommendationDate(), replace);
+                log.info("Job de recomendación enviado a n8n (intento {}/{}): requestId={}",
                         attempt, maxAttempts, job.getId());
                 return; // éxito
             } catch (RuntimeException ex) {
@@ -116,15 +116,15 @@ public class TrainingPlanGenerationService {
 
         // Agotados los reintentos: marcar el job como FAILED
         try {
-            trainingPlanService.failJob(job.getUserId(), job.getId(),
+            recommendationService.failJob(job.getUserId(), job.getId(),
                     lastEx != null ? lastEx.getMessage() : "Error desconocido");
         } catch (Exception failEx) {
             log.warn("No se pudo marcar como FAILED el job {}: {}", job.getId(), failEx.getMessage());
         }
-        if (lastEx instanceof PlanGenerationException generationException) {
+        if (lastEx instanceof GenerationException generationException) {
             throw generationException;
         }
-        throw new PlanGenerationException("No se pudo disparar la generación del plan tras "
+        throw new GenerationException("No se pudo disparar la generación de la recomendación tras "
                 + maxAttempts + " intentos: "
                 + (lastEx != null ? lastEx.getMessage() : "error desconocido"), lastEx);
     }

@@ -1,8 +1,8 @@
 package com.running.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.running.api.exception.PlanGenerationException;
-import com.running.api.exception.PlanGenerationNotConfiguredException;
+import com.running.api.exception.GenerationException;
+import com.running.api.exception.GenerationNotConfiguredException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -18,7 +18,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Cliente del webhook de n8n que arranca la generación de un plan.
+ * Cliente del webhook de n8n que arranca la generación de la recomendación
+ * diaria.
  * <p>
  * El workflow de n8n es agnóstico al usuario: recibe un JWT efímero en la
  * cabecera {@code Authorization} y lo reenvía al servidor MCP. La API no envía
@@ -26,7 +27,7 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-public class N8nPlanWebhookClient {
+public class N8nDailyWebhookClient {
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -34,11 +35,11 @@ public class N8nPlanWebhookClient {
     private final String mcpUrl;
     private final Duration requestTimeout;
 
-    public N8nPlanWebhookClient(
+    public N8nDailyWebhookClient(
             ObjectMapper objectMapper,
-            @Value("${app.training.plan.n8n-webhook-url:}") String webhookUrl,
-            @Value("${app.training.plan.mcp-url:http://localhost:8080/mcp}") String mcpUrl,
-            @Value("${app.training.plan.webhook-timeout-seconds:20}") long timeoutSeconds) {
+            @Value("${app.training.daily.n8n-webhook-url:}") String webhookUrl,
+            @Value("${app.training.daily.mcp-url:http://localhost:8080/mcp}") String mcpUrl,
+            @Value("${app.training.daily.webhook-timeout-seconds:20}") long timeoutSeconds) {
         this.objectMapper = objectMapper;
         this.webhookUrl = webhookUrl == null ? "" : webhookUrl.trim();
         this.mcpUrl = mcpUrl == null ? "" : mcpUrl.trim();
@@ -52,15 +53,15 @@ public class N8nPlanWebhookClient {
         return !webhookUrl.isBlank();
     }
 
-    public void trigger(String token, String requestId, LocalDate weekStart, boolean replace) {
+    public void trigger(String token, String requestId, LocalDate date, boolean replace) {
         if (!isConfigured()) {
-            throw new PlanGenerationNotConfiguredException(
-                    "El webhook de n8n no está configurado (APP_TRAINING_PLAN_N8N_WEBHOOK_URL)");
+            throw new GenerationNotConfiguredException(
+                    "El webhook de n8n no está configurado (APP_TRAINING_DAILY_N8N_WEBHOOK_URL)");
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("requestId", requestId);
-        body.put("weekStart", weekStart.toString());
+        body.put("date", date.toString());
         body.put("replace", replace);
         body.put("mcpUrl", mcpUrl);
 
@@ -79,18 +80,18 @@ public class N8nPlanWebhookClient {
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new PlanGenerationException(
+                throw new GenerationException(
                         "El webhook de n8n respondió con HTTP " + response.statusCode());
             }
-            log.info("Job de plan enviado a n8n: requestId={}, weekStart={}, httpStatus={}",
-                    requestId, weekStart, response.statusCode());
-        } catch (PlanGenerationException ex) {
+            log.info("Job de recomendación enviado a n8n: requestId={}, date={}, httpStatus={}",
+                    requestId, date, response.statusCode());
+        } catch (GenerationException ex) {
             throw ex;
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new PlanGenerationException("Petición al webhook de n8n interrumpida", ex);
+            throw new GenerationException("Petición al webhook de n8n interrumpida", ex);
         } catch (IOException | IllegalArgumentException ex) {
-            throw new PlanGenerationException("No se pudo llamar al webhook de n8n: " + ex.getMessage(), ex);
+            throw new GenerationException("No se pudo llamar al webhook de n8n: " + ex.getMessage(), ex);
         }
     }
 }

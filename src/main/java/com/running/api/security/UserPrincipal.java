@@ -8,7 +8,7 @@ import java.util.Set;
  * <p>
  * Los tokens de acceso normales y las claves de API no llevan scopes ni
  * audiencia: se consideran acceso completo del usuario. Los tokens efímeros
- * usados para generar planes de entrenamiento llevan {@code aud=mcp}, un
+ * usados para generar recomendaciones diarias llevan {@code aud=mcp}, un
  * {@code requestId} y los scopes {@code training:read}/{@code training:write}.
  */
 public record UserPrincipal(Long id, String email, String role,

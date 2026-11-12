@@ -28,7 +28,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@Schema(description = "Preferencias del atleta para la generación automática de planes semanales")
+@Schema(description = "Preferencias del atleta para la generación automática de la recomendación diaria")
 public class TrainingPreferences {
 
     @Id
@@ -41,7 +41,7 @@ public class TrainingPreferences {
 
     @Column(nullable = false)
     @Builder.Default
-    @Schema(description = "Activa la generación automática semanal", example = "true")
+    @Schema(description = "Activa la generación automática diaria", example = "true")
     private Boolean enabled = false;
 
     @Column(nullable = false)
@@ -49,13 +49,10 @@ public class TrainingPreferences {
     @Schema(description = "Zona horaria IANA del atleta", example = "Europe/Madrid")
     private String timezone = "Europe/Madrid";
 
-    @Column(name = "days_per_week")
-    @Schema(description = "Número de sesiones que el atleta quiere por semana", example = "5")
-    private Integer daysPerWeek;
-
-    @Column(name = "preferred_long_run_day")
-    @Schema(description = "Día preferido para el rodaje largo", example = "SATURDAY")
-    private String preferredLongRunDay;
+    @Column(name = "generation_hour")
+    @Builder.Default
+    @Schema(description = "Hora local (0-23) a la que se genera la recomendación", example = "6")
+    private Integer generationHour = 6;
 
     @Column(columnDefinition = "TEXT")
     @Schema(description = "Notas o restricciones para el entrenador/IA")

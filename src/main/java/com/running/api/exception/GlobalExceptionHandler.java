@@ -41,8 +41,9 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.FORBIDDEN, ex.getMessage(), request);
     }
 
-    @ExceptionHandler(PlanValidationException.class)
-    public ResponseEntity<ErrorResponseDto> handlePlanValidation(PlanValidationException ex, HttpServletRequest request) {
+    @ExceptionHandler(RecommendationValidationException.class)
+    public ResponseEntity<ErrorResponseDto> handleRecommendationValidation(
+            RecommendationValidationException ex, HttpServletRequest request) {
         String detail = ex.getViolations().stream()
                 .map(v -> v.code() + ": " + v.message())
                 .reduce((a, b) -> a + "; " + b)
@@ -50,24 +51,25 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.UNPROCESSABLE_ENTITY, detail, request);
     }
 
-    @ExceptionHandler(PlanAlreadyExistsException.class)
-    public ResponseEntity<ErrorResponseDto> handlePlanExists(PlanAlreadyExistsException ex, HttpServletRequest request) {
+    @ExceptionHandler(RecommendationAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponseDto> handleRecommendationExists(
+            RecommendationAlreadyExistsException ex, HttpServletRequest request) {
         return buildError(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
-    @ExceptionHandler(PlanJobStateException.class)
-    public ResponseEntity<ErrorResponseDto> handleJobState(PlanJobStateException ex, HttpServletRequest request) {
+    @ExceptionHandler(GenerationJobStateException.class)
+    public ResponseEntity<ErrorResponseDto> handleJobState(GenerationJobStateException ex, HttpServletRequest request) {
         return buildError(HttpStatus.CONFLICT, ex.getMessage(), request);
     }
 
-    @ExceptionHandler(PlanGenerationNotConfiguredException.class)
+    @ExceptionHandler(GenerationNotConfiguredException.class)
     public ResponseEntity<ErrorResponseDto> handleGenerationNotConfigured(
-            PlanGenerationNotConfiguredException ex, HttpServletRequest request) {
+            GenerationNotConfiguredException ex, HttpServletRequest request) {
         return buildError(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
     }
 
-    @ExceptionHandler(PlanGenerationException.class)
-    public ResponseEntity<ErrorResponseDto> handleGeneration(PlanGenerationException ex, HttpServletRequest request) {
+    @ExceptionHandler(GenerationException.class)
+    public ResponseEntity<ErrorResponseDto> handleGeneration(GenerationException ex, HttpServletRequest request) {
         return buildError(HttpStatus.BAD_GATEWAY, ex.getMessage(), request);
     }
 

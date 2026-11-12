@@ -30,12 +30,12 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
   -d '{"email":"runner@example.com","password":"password123"}'
 ```
 
-### Tokens de generación de planes
+### Tokens de generación diaria
 
-Además del JWT de acceso y la API key, el servidor acepta un **JWT efímero de generación de plan**
-que emite la propia API para el workflow de n8n:
+Además del JWT de acceso y la API key, el servidor acepta un **JWT efímero de generación** que emite
+la propia API para el workflow de n8n:
 
-- `type=PLAN_GENERATION`, `aud=mcp`, `requestId=<job>`
+- `type=GENERATION`, `aud=mcp`, `requestId=<job>`
 - Scopes `training:read training:write`
 - Vigencia corta (45 min por defecto)
 - **Solo válido en `/mcp`**: no sirve para llamar a la API REST
@@ -43,8 +43,8 @@ que emite la propia API para el workflow de n8n:
   `?access_token=<token>` (necesario para el nodo *MCP Client Tool* de n8n)
 
 Las credenciales históricas (JWT de acceso y `X-Api-Key`) no llevan scopes y conservan el acceso
-completo del usuario. Cuando un token sí lleva scopes, `save_weekly_plan` y `fail_generation_job`
-exigen `training:write`, y `get_training_context` exige `training:read`.
+completo del usuario. Cuando un token sí lleva scopes, `save_daily_recommendation` y
+`fail_generation_job` exigen `training:write`, y `get_training_context` exige `training:read`.
 
 ---
 
@@ -69,11 +69,11 @@ MCP es un protocolo estándar que permite a modelos de lenguaje conectarse a API
 | `get_training_load` | Carga de entrenamiento (TRIMP, HRSS) | `activityId` (string, requerido) |
 | `get_vo2max` | Estimación VO2Max y predicciones de carrera | `activityId` (string, requerido) |
 | `get_acwr_status` | Estado ACWR (riesgo de lesión) | - |
-| `get_training_context` | Contexto completo del atleta para planificar la semana (JSON) | `weekStart` (string, opcional) |
-| `save_weekly_plan` | Valida y guarda el plan semanal generado por el LLM | `weekStart` (string, requerido), `planJson` (string, requerido), `replace` (boolean, opcional), `requestId` (string, opcional) |
+| `get_training_context` | Contexto completo del atleta para recomendar el día (JSON) | `date` (string, opcional) |
+| `save_daily_recommendation` | Valida y guarda la recomendación diaria generada por el LLM | `date` (string, requerido), `recommendationJson` (string, requerido), `replace` (boolean, opcional), `requestId` (string, opcional) |
 | `fail_generation_job` | Marca el job como `FAILED` cuando no se puede completar | `error` (string, requerido), `requestId` (string, opcional) |
 
-Las tres últimas son las que cierran el ciclo de **generación de planes**; el resto son de consulta.
+Las tres últimas son las que cierran el ciclo de **recomendación diaria**; el resto son de consulta.
 
 ---
 
@@ -226,10 +226,11 @@ Reiniciar para que cargue la configuración.
 }
 ```
 
-### Generación de planes
+### Recomendación diaria
 
-`get_training_context` devuelve un JSON con el resumen del atleta, ACWR, últimas 4 semanas,
-actividades recientes, marcas personales, preferencias y plan actual:
+`get_training_context` devuelve un JSON con la fecha a recomendar, el resumen del atleta, ACWR,
+últimas 4 semanas, actividades recientes, actividad de ese día, marcas personales, preferencias, la
+recomendación ya existente para la fecha e histórico reciente:
 
 ```json
 {
@@ -239,14 +240,14 @@ actividades recientes, marcas personales, preferencias y plan actual:
   "params": {
     "name": "get_training_context",
     "arguments": {
-      "weekStart": "2026-11-16"
+      "date": "2026-11-11"
     }
   }
 }
 ```
 
-`save_weekly_plan` recibe el plan como **string JSON** en `planJson` (el esquema de la herramienta es
-plano porque MCP no anida objetos en `arguments` de forma portable):
+`save_daily_recommendation` recibe la recomendación como **string JSON** en `recommendationJson` (el
+esquema de la herramienta es plano porque MCP no anida objetos en `arguments` de forma portable):
 
 ```json
 {
@@ -254,39 +255,38 @@ plano porque MCP no anida objetos en `arguments` de forma portable):
   "id": 6,
   "method": "tools/call",
   "params": {
-    "name": "save_weekly_plan",
+    "name": "save_daily_recommendation",
     "arguments": {
-      "weekStart": "2026-11-16",
+      "date": "2026-11-11",
       "replace": false,
-      "planJson": "{\"summary\":\"Semana de carga moderada\",\"coachNotes\":\"Baja el jueves si el ACWR sube\",\"targetWeeklyDistanceMeters\":24000,\"targetWeeklyLoad\":220,\"workouts\":[{\"date\":\"2026-11-16\",\"type\":\"EASY\",\"title\":\"Rodaje suave\",\"description\":\"Z2\",\"targetDistanceMeters\":8000,\"targetDurationSeconds\":2880,\"targetPaceMinPerKm\":5.4,\"targetHrZone\":2,\"targetLoad\":60},{\"date\":\"2026-11-18\",\"type\":\"TEMPO\",\"title\":\"Tempo\",\"mainSet\":\"3x10' a ritmo umbral\",\"targetDistanceMeters\":10000,\"targetPaceMinPerKm\":4.6,\"targetHrZone\":4}]}"
+      "recommendationJson": "{\"summary\":\"Rodaje suave de 45 min en Z2\",\"analysis\":\"ACWR en 1.05, 48 h desde la última carrera y carga estable las últimas 4 semanas.\",\"coachNotes\":\"Mantén la respiración cómoda y no mires el ritmo.\",\"workout\":{\"type\":\"EASY\",\"title\":\"Rodaje suave\",\"description\":\"45 min en Z2\",\"targetDistanceMeters\":8000,\"targetDurationSeconds\":2700,\"targetPaceMinPerKm\":5.6,\"targetHrZone\":2,\"targetLoad\":50,\"mainSet\":\"45 min continuos\"},\"model\":\"gpt-4.1-mini\",\"promptVersion\":\"daily-recommendation-v1\"}"
     }
   }
 }
 ```
 
-Contrato de `planJson`:
+Contrato de `recommendationJson`:
 
 | Campo | Tipo | Obligatorio |
 |-------|------|-------------|
 | `summary` | string | No |
+| `analysis` | string | No |
 | `coachNotes` | string | No |
-| `targetWeeklyDistanceMeters` | number | No |
-| `targetWeeklyLoad` | number | No |
+| `workout` | object | Sí |
+| `workout.type` | enum | Sí |
+| `workout.title` | string | Sí |
+| `workout.description` | string | No |
+| `workout.targetDistanceMeters` | number | Solo si no hay duración y no es `REST` |
+| `workout.targetDurationSeconds` | number | Solo si no hay distancia y no es `REST` |
+| `workout.targetPaceMinPerKm` | number (2-15) | No |
+| `workout.targetHrZone` | integer (1-5) | No |
+| `workout.targetLoad` | number | No |
+| `workout.mainSet` | string | No |
 | `model` / `promptVersion` | string | No |
-| `workouts` | array | Sí (al menos 1) |
-| `workouts[].date` | `YYYY-MM-DD` | Sí |
-| `workouts[].type` | enum | Sí |
-| `workouts[].title` | string | Sí |
-| `workouts[].description` | string | No |
-| `workouts[].targetDistanceMeters` | number | No |
-| `workouts[].targetDurationSeconds` | number | No |
-| `workouts[].targetPaceMinPerKm` | number (2-15) | No |
-| `workouts[].targetHrZone` | integer (1-5) | No |
-| `workouts[].targetLoad` | number | No |
-| `workouts[].mainSet` | string | No |
 
 Tipos válidos: `EASY`, `RECOVERY`, `LONG_RUN`, `TEMPO`, `INTERVALS`, `HILLS`, `RACE_PACE`, `RACE`,
-`CROSS_TRAINING`, `OTHER`. `REST` **no** es válido: los días de descanso se omiten.
+`CROSS_TRAINING`, `REST`, `OTHER`. En un día de descanso usa `type=REST` con un título como
+`Descanso`, sin distancia, duración ni ritmo.
 
 Respuesta correcta (`isError=false`):
 
@@ -297,15 +297,15 @@ Respuesta correcta (`isError=false`):
     "content": [
       {
         "type": "text",
-        "text": "{\"ok\":true,\"planId\":\"...\",\"weekStart\":\"2026-11-16\",\"version\":1,\"status\":\"ACTIVE\",\"plan\":{...}}"
+        "text": "{\"ok\":true,\"recommendationId\":\"...\",\"date\":\"2026-11-11\",\"type\":\"EASY\",\"title\":\"Rodaje suave\",\"requestId\":\"...\",\"recommendation\":{...}}"
       }
     ]
   }
 }
 ```
 
-Si el plan incumple las reglas, la respuesta es `isError=true` con las violaciones para que el agente
-corrija y reintente **con el mismo `requestId`**:
+Si la recomendación incumple las reglas, la respuesta es `isError=true` con las violaciones para que
+el agente corrija y reintente **con el mismo `requestId`**:
 
 ```json
 {
@@ -314,7 +314,7 @@ corrija y reintente **con el mismo `requestId`**:
     "content": [
       {
         "type": "text",
-        "text": "{\"ok\":false,\"code\":\"PLAN_INVALID\",\"violations\":[{\"code\":\"PACE_OUT_OF_RANGE\",\"message\":\"...\"}],\"hint\":\"Corrige las violaciones y vuelve a llamar a save_weekly_plan con el mismo requestId.\"}"
+        "text": "{\"ok\":false,\"code\":\"RECOMMENDATION_INVALID\",\"violations\":[{\"code\":\"WORKOUT_TARGET_REQUIRED\",\"message\":\"...\"}],\"hint\":\"Corrige las violaciones y vuelve a llamar a save_daily_recommendation con el mismo requestId.\"}"
       }
     ]
   }
@@ -342,13 +342,14 @@ corrija y reintente **con el mismo `requestId`**:
 
 ### Integración con n8n
 
-El workflow de ejemplo está en [`docs/n8n/weekly-training-plan.json`](docs/n8n/weekly-training-plan.json).
-La API lo llama con un JWT efímero y el body `{requestId, weekStart, replace, mcpUrl}`. El workflow
-usa un **AI Agent** de n8n con un **MCP Client Tool** conectado al servidor:
+El workflow de ejemplo está en
+[`docs/n8n/daily-workout-recommendation.json`](docs/n8n/daily-workout-recommendation.json). La API lo
+llama con un JWT efímero y el body `{requestId, date, replace, mcpUrl}`. El workflow usa un **AI
+Agent** de n8n con un **MCP Client Tool** conectado al servidor:
 
 1. El agente llama a `get_training_context` → contexto del atleta en JSON.
-2. El LLM (OpenAI Chat Model) genera el plan JSON.
-3. n8n envía el JSON a `save_weekly_plan` → validación y persistencia.
+2. El LLM (OpenAI Chat Model) analiza el estado y genera la recomendación JSON.
+3. n8n envía el JSON a `save_daily_recommendation` → validación y persistencia.
 4. `fail_generation_job` (solo en la rama de error).
 
 El nodo **MCP Client Tool** no permite credenciales dinámicas por ejecución, por lo que el token del
@@ -362,7 +363,7 @@ La API acepta este parámetro **solo en `/mcp`**; las rutas REST siguen exigiend
 `Authorization`. Como alternativa puedes usar la cabecera `Authorization: Bearer <token>` con
 `curl` o con un nodo HTTP Request.
 
-> La URL del MCP (`APP_TRAINING_PLAN_MCP_URL`) se resuelve **desde n8n**, no desde la API. Si n8n
+> La URL del MCP (`APP_TRAINING_DAILY_MCP_URL`) se resuelve **desde n8n**, no desde la API. Si n8n
 > corre en otro host o contenedor, `localhost` o el nombre de servicio de Docker (`running-api`)
 > no son accesibles: usa la URL pública o `host.docker.internal`. Comprueba la conectividad desde
 > la máquina de n8n con `curl -i "<mcpUrl>?access_token=<token>"`; un `401` significa que llega y
@@ -436,7 +437,7 @@ src/main/java/com/running/api/mcp/
     ├── ActivityTools.java            # Herramientas de actividades
     ├── StatsTools.java               # Herramientas de estadísticas
     ├── AnalyticsTools.java           # Herramientas de analíticas
-    └── TrainingTools.java            # Contexto, guardado de plan y fallo de job
+    └── TrainingTools.java            # Contexto, recomendación diaria y fallo de job
 ```
 
 ---
@@ -444,10 +445,10 @@ src/main/java/com/running/api/mcp/
 ## Notas
 
 - El servidor MCP usa **SSE (Server-Sent Events)** para streaming
-- Las herramientas de consulta retornan texto formateado; las de planificación retornan JSON
+- Las herramientas de consulta retornan texto formateado; las de recomendación retornan JSON
 - El endpoint `/mcp` acepta POST y GET
-- Las herramientas son de lectura **salvo** `save_weekly_plan` y `fail_generation_job`, que escriben
-  el plan y el estado del job del usuario autenticado
+- Las herramientas son de lectura **salvo** `save_daily_recommendation` y `fail_generation_job`, que
+  escriben la recomendación y el estado del job del usuario autenticado
 - `tools/list` y `tools/call` son **stateless**: no requieren `Mcp-Session-Id` (solo `initialize` crea sesión)
 - Se requiere `Authorization: Bearer <token>` (JWT) o `X-Api-Key: rk_...` en todas las peticiones
 - Los tokens con scopes exigen `training:read`/`training:write`; los tokens sin scopes conservan acceso completo

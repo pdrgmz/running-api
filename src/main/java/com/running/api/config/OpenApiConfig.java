@@ -69,7 +69,7 @@ public class OpenApiConfig {
                 .addSecurityItem(new SecurityRequirement().addList(API_KEY_SCHEME))
                 .info(new Info()
                         .title("Running Tracker & Analytics API")
-                        .version("1.7.0")
+                        .version("1.8.0")
                         .description("""
                                 API REST para la ingesta de actividades de carrera (TCX, GPX y FIT), analítica
                                 fisiológica avanzada, cálculo de récords personales (PB), exportación

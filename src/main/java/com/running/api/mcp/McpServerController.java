@@ -100,37 +100,39 @@ public class McpServerController {
                 args -> getAcwrStatus());
 
         registerTool("get_training_context",
-                "Contexto completo del atleta para generar el plan semanal: resumen, ACWR, "
-                        + "actividades recientes, últimas 4 semanas, marcas personales y plan actual. "
-                        + "Devuelve JSON.",
-                Map.of("weekStart", new McpParam("string",
-                        "Lunes de la semana a planificar (YYYY-MM-DD). Opcional; por defecto la semana actual.",
+                "Contexto completo del atleta para recomendar el entrenamiento del día: resumen, ACWR, "
+                        + "actividades recientes, actividad de la fecha, últimas 4 semanas, marcas personales, "
+                        + "recomendación de ese día e histórico reciente. Devuelve JSON.",
+                Map.of("date", new McpParam("string",
+                        "Día a recomendar (YYYY-MM-DD). Opcional; por defecto hoy en la zona del atleta.",
                         false)),
                 this::getTrainingContext);
 
-        registerTool("save_weekly_plan",
-                "Valida y guarda el plan semanal generado por el LLM. El usuario sale del JWT. "
-                        + "Devuelve JSON con ok/planId o, si isError=true, las violaciones a corregir. "
-                        + "El parámetro planJson es un string con el objeto del plan: "
-                        + "{\"summary\":\"...\",\"coachNotes\":\"...\",\"targetWeeklyDistanceMeters\":42000,"
-                        + "\"targetWeeklyLoad\":320,\"workouts\":[{\"date\":\"2026-11-16\",\"type\":\"EASY\","
-                        + "\"title\":\"Rodaje suave\",\"targetDistanceMeters\":8000,"
-                        + "\"targetDurationSeconds\":2880,\"targetPaceMinPerKm\":5.4,\"targetHrZone\":2}]}. "
-                        + "Tipos válidos: EASY, RECOVERY, LONG_RUN, TEMPO, INTERVALS, HILLS, RACE_PACE, "
-                        + "RACE, CROSS_TRAINING, OTHER.",
+        registerTool("save_daily_recommendation",
+                "Valida y guarda la recomendación diaria generada por el LLM. El usuario sale del JWT. "
+                        + "Devuelve JSON con ok/recommendationId o, si isError=true, las violaciones a corregir. "
+                        + "El parámetro recommendationJson es un string con el objeto de la recomendación: "
+                        + "{\"summary\":\"Rodaje suave de 45 min en Z2\",\"analysis\":\"ACWR estable y poca carga "
+                        + "los últimos días\",\"coachNotes\":\"Mantén la respiración cómoda\",\"workout\":"
+                        + "{\"type\":\"EASY\",\"title\":\"Rodaje suave\",\"description\":\"45 min en Z2\","
+                        + "\"targetDistanceMeters\":8000,\"targetDurationSeconds\":2700,"
+                        + "\"targetPaceMinPerKm\":5.6,\"targetHrZone\":2,\"targetLoad\":50}}. "
+                        + "En días de descanso usa {\"type\":\"REST\",\"title\":\"Descanso\"} sin distancia ni "
+                        + "duración. Tipos válidos: EASY, RECOVERY, LONG_RUN, TEMPO, INTERVALS, HILLS, "
+                        + "RACE_PACE, RACE, CROSS_TRAINING, REST, OTHER.",
                 Map.of(
-                        "weekStart", new McpParam("string",
-                                "Lunes de la semana (YYYY-MM-DD). Debe coincidir con el job.", true),
-                        "planJson", new McpParam("string",
-                                "JSON del plan como string", true),
+                        "date", new McpParam("string",
+                                "Día de la recomendación (YYYY-MM-DD). Debe coincidir con el job.", true),
+                        "recommendationJson", new McpParam("string",
+                                "JSON de la recomendación como string", true),
                         "replace", new McpParam("boolean",
-                                "Si ya existe un plan activo, archívalo y crea una versión nueva.", false),
+                                "Si ya existe una recomendación para ese día, sobrescríbela.", false),
                         "requestId", new McpParam("string",
                                 "Solo si el token no lo incluye; normalmente se toma del JWT.", false)),
-                this::saveWeeklyPlan);
+                this::saveDailyRecommendation);
 
         registerTool("fail_generation_job",
-                "Marca el job de generación como FAILED cuando n8n no puede completar el plan.",
+                "Marca el job de generación como FAILED cuando n8n no puede completar la recomendación.",
                 Map.of(
                         "error", new McpParam("string", "Descripción del fallo", true),
                         "requestId", new McpParam("string",
@@ -395,8 +397,8 @@ public class McpServerController {
         return trainingTools.getTrainingContext(args);
     }
 
-    private McpToolResult saveWeeklyPlan(JsonNode args) {
-        return trainingTools.saveWeeklyPlan(args);
+    private McpToolResult saveDailyRecommendation(JsonNode args) {
+        return trainingTools.saveDailyRecommendation(args);
     }
 
     private McpToolResult failGenerationJob(JsonNode args) {

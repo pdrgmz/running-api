@@ -1,24 +1,25 @@
 package com.running.api.service;
 
 import com.running.api.dto.AcwrStatusDto;
+import com.running.api.dto.DailyRecommendationResponseDto;
 import com.running.api.dto.RecordResponseDto;
 import com.running.api.dto.SummaryStatsDto;
 import com.running.api.dto.TrainingContextDto;
-import com.running.api.dto.TrainingPlanResponseDto;
 import com.running.api.dto.TrainingPreferencesDto;
 import com.running.api.model.Activity;
 import com.running.api.model.TrainingPreferences;
 import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.TrainingPreferencesRepository;
-import com.running.api.util.TrainingWeekUtils;
+import com.running.api.util.TrainingTimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -33,28 +34,28 @@ public class TrainingContextService {
     private static final int RECENT_ACTIVITY_DAYS = 28;
     private static final int RECENT_ACTIVITY_LIMIT = 30;
     private static final int RECENT_WEEKS = 4;
+    private static final int RECENT_RECOMMENDATIONS = 14;
 
     private final ActivityRepository activityRepository;
     private final TrainingPreferencesRepository preferencesRepository;
-    private final TrainingPlanService trainingPlanService;
+    private final DailyRecommendationService recommendationService;
     private final StatsService statsService;
     private final AnalyticsService analyticsService;
 
     @Transactional
-    public TrainingContextDto getContext(Long userId, LocalDate requestedWeekStart) {
+    public TrainingContextDto getContext(Long userId, LocalDate requestedDate) {
         TrainingPreferences preferences = preferencesRepository.findByUserId(userId).orElse(null);
-        ZoneId zone = TrainingWeekUtils.zoneOrDefault(
+        ZoneId zone = TrainingTimeUtils.zoneOrDefault(
                 preferences == null ? null : preferences.getTimezone());
         LocalDate today = LocalDate.now(zone);
-        LocalDate weekStart = requestedWeekStart != null
-                ? requestedWeekStart
-                : TrainingWeekUtils.currentWeekStart(zone);
+        LocalDate date = requestedDate != null ? requestedDate : today;
 
         SummaryStatsDto summary;
         try {
             summary = statsService.getSummary(userId, null, null);
         } catch (Exception ex) {
-            log.warn("No se pudo calcular el resumen para el contexto del usuario {}: {}", userId, ex.getMessage());
+            log.warn("No se pudo calcular el resumen para el contexto del usuario {}: {}",
+                    userId, ex.getMessage());
             summary = null;
         }
 
@@ -62,7 +63,8 @@ public class TrainingContextService {
         try {
             acwr = analyticsService.calculateCurrentAcwr(userId);
         } catch (Exception ex) {
-            log.warn("No se pudo calcular el ACWR para el contexto del usuario {}: {}", userId, ex.getMessage());
+            log.warn("No se pudo calcular el ACWR para el contexto del usuario {}: {}",
+                    userId, ex.getMessage());
             acwr = null;
         }
 
@@ -83,15 +85,28 @@ public class TrainingContextService {
                 .map(this::toRecentActivity)
                 .toList();
 
+        List<TrainingContextDto.RecentActivityDto> activitiesOnDate = activityRepository
+                .findByUserIdAndStartTimeBetweenOrderByStartTimeAsc(
+                        userId, date.atStartOfDay(), date.atTime(23, 59, 59))
+                .stream()
+                .map(this::toRecentActivity)
+                .toList();
+
         TrainingContextDto.Preferences prefsDto = new TrainingContextDto.Preferences(
                 preferences != null,
                 preferences == null ? Boolean.FALSE : preferences.getEnabled(),
-                preferences == null ? null : preferences.getDaysPerWeek(),
-                preferences == null ? null : preferences.getPreferredLongRunDay(),
+                preferences == null ? TrainingTimeUtils.DEFAULT_TIMEZONE : preferences.getTimezone(),
+                preferences == null
+                        ? TrainingTimeUtils.DEFAULT_GENERATION_HOUR
+                        : TrainingTimeUtils.normalizeHour(preferences.getGenerationHour()),
                 preferences == null ? null : preferences.getNotes());
 
+        DailyRecommendationResponseDto recommendationForDate = recommendationService
+                .getRecommendation(userId, date)
+                .orElse(null);
+
         return new TrainingContextDto(
-                weekStart,
+                date,
                 today,
                 zone.getId(),
                 prefsDto,
@@ -99,18 +114,21 @@ public class TrainingContextService {
                 acwr,
                 athleteMaxHr,
                 recentActivities,
-                weeklySummaries(userId, weekStart),
+                activitiesOnDate,
+                weeklySummaries(userId, date),
                 personalRecords(userId),
-                currentPlan(userId));
+                recommendationForDate,
+                recommendationService.recentRecommendations(userId, RECENT_RECOMMENDATIONS));
     }
 
     public TrainingPreferencesDto getPreferences(Long userId) {
-        return trainingPlanService.getPreferences(userId);
+        return recommendationService.getPreferences(userId);
     }
 
-    private List<TrainingContextDto.WeeklySummaryDto> weeklySummaries(Long userId, LocalDate weekStart) {
-        LocalDate firstWeek = weekStart.minusWeeks(RECENT_WEEKS);
-        LocalDate lastDay = weekStart.minusDays(1);
+    private List<TrainingContextDto.WeeklySummaryDto> weeklySummaries(Long userId, LocalDate date) {
+        LocalDate currentWeek = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDate firstWeek = currentWeek.minusWeeks(RECENT_WEEKS);
+        LocalDate lastDay = currentWeek.minusDays(1);
         List<Activity> activities = activityRepository.findByUserIdAndStartTimeBetweenOrderByStartTimeAsc(
                 userId, firstWeek.atStartOfDay(), lastDay.atTime(23, 59, 59));
 
@@ -119,13 +137,14 @@ public class TrainingContextService {
             if (activity.getStartTime() == null) {
                 continue;
             }
-            LocalDate week = TrainingWeekUtils.normalizeToMonday(activity.getStartTime().toLocalDate());
+            LocalDate week = activity.getStartTime().toLocalDate()
+                    .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
             byWeek.computeIfAbsent(week, k -> new ArrayList<>()).add(activity);
         }
 
         List<TrainingContextDto.WeeklySummaryDto> summaries = new ArrayList<>();
         for (int i = RECENT_WEEKS - 1; i >= 0; i--) {
-            LocalDate week = weekStart.minusWeeks(i + 1L);
+            LocalDate week = currentWeek.minusWeeks(i + 1L);
             List<Activity> weekActivities = byWeek.getOrDefault(week, List.of());
             double distance = weekActivities.stream()
                     .mapToDouble(a -> a.getDistanceMeters() == null ? 0.0 : a.getDistanceMeters())
@@ -156,26 +175,10 @@ public class TrainingContextService {
         try {
             return statsService.getPersonalRecords(userId);
         } catch (Exception ex) {
-            log.warn("No se pudieron calcular las marcas personales para el usuario {}: {}", userId, ex.getMessage());
+            log.warn("No se pudieron calcular las marcas personales para el usuario {}: {}",
+                    userId, ex.getMessage());
             return List.of();
         }
-    }
-
-    private TrainingContextDto.CurrentPlan currentPlan(Long userId) {
-        return trainingPlanService.getCurrentPlan(userId)
-                .map(this::toCurrentPlan)
-                .orElse(null);
-    }
-
-    private TrainingContextDto.CurrentPlan toCurrentPlan(TrainingPlanResponseDto plan) {
-        return new TrainingContextDto.CurrentPlan(
-                plan.planId(),
-                plan.weekStart(),
-                plan.weekEnd(),
-                plan.status() == null ? null : plan.status().name(),
-                plan.version(),
-                plan.summary(),
-                plan.workouts());
     }
 
     private TrainingContextDto.RecentActivityDto toRecentActivity(Activity activity) {

@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
  *       {@code Authorization: Bearer <token>} para llamar a la API.</li>
  *   <li>{@code REFRESH}: token de larga duración, usado únicamente para obtener
  *       un nuevo token de acceso en {@code POST /api/v1/auth/refresh}.</li>
- *   <li>{@code PLAN_GENERATION}: token efímero y restringido ({@code aud=mcp},
+ *   <li>{@code GENERATION}: token efímero y restringido ({@code aud=mcp},
  *       scopes {@code training:read training:write}) que la API entrega a n8n
  *       para leer el contexto y guardar un plan semanal. Solo es válido en
  *       {@code /mcp}.</li>
@@ -42,7 +42,7 @@ public class JwtService {
     public enum TokenType {
         ACCESS,
         REFRESH,
-        PLAN_GENERATION
+        GENERATION
     }
 
     private static final String TYPE_CLAIM = "type";
@@ -50,10 +50,10 @@ public class JwtService {
     private static final String REQUEST_ID_CLAIM = "requestId";
     private static final String MCP_AUDIENCE = "mcp";
 
-    /** Scopes del token efímero que usa n8n para generar un plan. */
+    /** Scopes del token efímero que usa n8n para generar una recomendación. */
     public static final String SCOPE_TRAINING_READ = "training:read";
     public static final String SCOPE_TRAINING_WRITE = "training:write";
-    public static final String PLAN_GENERATION_SCOPES =
+    public static final String GENERATION_SCOPES =
             SCOPE_TRAINING_READ + " " + SCOPE_TRAINING_WRITE;
 
     private final SecretKey key;
@@ -85,21 +85,21 @@ public class JwtService {
     }
 
     /**
-     * Token efímero para que n8n genere y guarde un plan de entrenamiento.
+     * Token efímero para que n8n genere y guarde una recomendación diaria.
      * <p>
      * La identidad sigue siendo el {@code sub} del usuario: n8n no necesita
      * conocer ni enviar el {@code userId}. El token solo es aceptado en
      * {@code /mcp} y lleva el {@code requestId} del job para correlacionar el
      * guardado.
      */
-    public String generatePlanGenerationToken(User user, String requestId, Duration ttl) {
+    public String generateGenerationToken(User user, String requestId, Duration ttl) {
         Instant now = Instant.now();
         return Jwts.builder()
                 .subject(String.valueOf(user.getId()))
                 .claim("email", user.getEmail())
                 .claim("role", user.getRole())
-                .claim(TYPE_CLAIM, TokenType.PLAN_GENERATION.name())
-                .claim(SCOPE_CLAIM, PLAN_GENERATION_SCOPES)
+                .claim(TYPE_CLAIM, TokenType.GENERATION.name())
+                .claim(SCOPE_CLAIM, GENERATION_SCOPES)
                 .claim(REQUEST_ID_CLAIM, requestId)
                 .audience().add(MCP_AUDIENCE).and()
                 .issuedAt(Date.from(now))
@@ -123,7 +123,7 @@ public class JwtService {
 
     /**
      * Valida un token utilizable como credencial de acceso (firma, expiración
-     * y tipo). Se aceptan tokens {@code ACCESS} y {@code PLAN_GENERATION}.
+     * y tipo). Se aceptan tokens {@code ACCESS} y {@code GENERATION}.
      *
      * @throws JwtException si el token es inválido, está manipulado, ha expirado
      *                      o es un refresh token.

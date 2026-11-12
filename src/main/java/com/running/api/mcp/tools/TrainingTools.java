@@ -3,21 +3,21 @@ package com.running.api.mcp.tools;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.running.api.dto.PlanGenerationJobResponseDto;
+import com.running.api.dto.DailyGenerationJobResponseDto;
+import com.running.api.dto.DailyRecommendationPayload;
+import com.running.api.dto.DailyRecommendationResponseDto;
 import com.running.api.dto.TrainingContextDto;
-import com.running.api.dto.TrainingPlanResponseDto;
-import com.running.api.dto.WeeklyPlanPayload;
 import com.running.api.exception.ForbiddenOperationException;
-import com.running.api.exception.PlanAlreadyExistsException;
-import com.running.api.exception.PlanJobStateException;
-import com.running.api.exception.PlanValidationException;
+import com.running.api.exception.GenerationJobStateException;
+import com.running.api.exception.RecommendationAlreadyExistsException;
+import com.running.api.exception.RecommendationValidationException;
 import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.mcp.McpToolResult;
 import com.running.api.security.CurrentUserService;
 import com.running.api.security.JwtService;
 import com.running.api.security.UserPrincipal;
+import com.running.api.service.DailyRecommendationService;
 import com.running.api.service.TrainingContextService;
-import com.running.api.service.TrainingPlanService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -26,7 +26,8 @@ import java.time.LocalDate;
 
 /**
  * Herramientas MCP que cierran el ciclo de generación: contexto de
- * entrenamiento, guardado del plan y reporte de fallo del job.
+ * entrenamiento, guardado de la recomendación diaria y reporte de fallo del
+ * job.
  * <p>
  * El usuario se resuelve siempre del token autenticado; nunca se acepta un
  * {@code userId} como parámetro.
@@ -37,7 +38,7 @@ import java.time.LocalDate;
 public class TrainingTools {
 
     private final TrainingContextService contextService;
-    private final TrainingPlanService trainingPlanService;
+    private final DailyRecommendationService recommendationService;
     private final CurrentUserService currentUserService;
     private final ObjectMapper objectMapper;
 
@@ -45,48 +46,49 @@ public class TrainingTools {
         try {
             currentUserService.requireScope(JwtService.SCOPE_TRAINING_READ);
             Long userId = currentUserService.requireUserId();
-            String rawWeekStart = text(args, "weekStart");
-            LocalDate weekStart = trainingPlanService.parseWeekStart(rawWeekStart);
-            TrainingContextDto context = contextService.getContext(userId, weekStart);
+            LocalDate date = recommendationService.parseDate(text(args, "date"));
+            TrainingContextDto context = contextService.getContext(userId, date);
             return McpToolResult.success(objectMapper.writeValueAsString(context));
         } catch (ForbiddenOperationException ex) {
             return errorResult("FORBIDDEN", ex.getMessage(), null);
-        } catch (PlanValidationException ex) {
+        } catch (RecommendationValidationException ex) {
             return validationError(ex);
         } catch (Exception ex) {
             return errorResult("TRAINING_CONTEXT_ERROR", ex.getMessage(), null);
         }
     }
 
-    public McpToolResult saveWeeklyPlan(JsonNode args) {
+    public McpToolResult saveDailyRecommendation(JsonNode args) {
         try {
             currentUserService.requireScope(JwtService.SCOPE_TRAINING_WRITE);
             UserPrincipal principal = currentUserService.requirePrincipal();
             Long userId = principal.id();
 
             String requestId = resolveRequestId(args, principal);
-            LocalDate weekStart = trainingPlanService.parseWeekStart(text(args, "weekStart"));
+            LocalDate date = recommendationService.parseDate(text(args, "date"));
             boolean replace = args.path("replace").asBoolean(false);
-            WeeklyPlanPayload payload = trainingPlanService.parsePlanJson(text(args, "planJson"));
+            DailyRecommendationPayload payload = recommendationService.parseRecommendationJson(
+                    text(args, "recommendationJson"));
 
-            TrainingPlanResponseDto plan = trainingPlanService.saveWeeklyPlan(
-                    userId, requestId, weekStart, replace, payload);
+            DailyRecommendationResponseDto recommendation =
+                    recommendationService.saveDailyRecommendation(
+                            userId, requestId, date, replace, payload);
 
             ObjectNode result = objectMapper.createObjectNode();
             result.put("ok", true);
-            result.put("planId", plan.planId());
-            result.put("weekStart", plan.weekStart().toString());
-            result.put("version", plan.version());
-            result.put("status", plan.status().name());
-            result.put("requestId", plan.requestId());
-            result.set("plan", objectMapper.valueToTree(plan));
+            result.put("recommendationId", recommendation.recommendationId());
+            result.put("date", recommendation.date().toString());
+            result.put("type", recommendation.workout().type().name());
+            result.put("title", recommendation.workout().title());
+            result.put("requestId", recommendation.requestId());
+            result.set("recommendation", objectMapper.valueToTree(recommendation));
             return McpToolResult.success(objectMapper.writeValueAsString(result));
-        } catch (PlanValidationException ex) {
+        } catch (RecommendationValidationException ex) {
             return validationError(ex);
-        } catch (PlanAlreadyExistsException ex) {
-            return errorResult("PLAN_EXISTS", ex.getMessage(),
-                    "Usa replace=true si quieres archivar el plan actual y crear una versión nueva.");
-        } catch (PlanJobStateException ex) {
+        } catch (RecommendationAlreadyExistsException ex) {
+            return errorResult("RECOMMENDATION_EXISTS", ex.getMessage(),
+                    "Usa replace=true si quieres sobrescribir la recomendación de ese día.");
+        } catch (GenerationJobStateException ex) {
             return errorResult("JOB_CONFLICT", ex.getMessage(), null);
         } catch (ResourceNotFoundException ex) {
             return errorResult("JOB_NOT_FOUND", ex.getMessage(),
@@ -94,8 +96,8 @@ public class TrainingTools {
         } catch (ForbiddenOperationException ex) {
             return errorResult("FORBIDDEN", ex.getMessage(), null);
         } catch (Exception ex) {
-            log.error("[MCP] Error guardando plan semanal: {}", ex.getMessage(), ex);
-            return errorResult("SAVE_PLAN_ERROR", ex.getMessage(), null);
+            log.error("[MCP] Error guardando la recomendación diaria: {}", ex.getMessage(), ex);
+            return errorResult("SAVE_RECOMMENDATION_ERROR", ex.getMessage(), null);
         }
     }
 
@@ -108,7 +110,7 @@ public class TrainingTools {
             if (error == null || error.isBlank()) {
                 error = "n8n reportó un fallo sin detalle";
             }
-            PlanGenerationJobResponseDto job = trainingPlanService.failJob(
+            DailyGenerationJobResponseDto job = recommendationService.failJob(
                     principal.id(), requestId, error);
 
             ObjectNode result = objectMapper.createObjectNode();
@@ -118,12 +120,12 @@ public class TrainingTools {
             return McpToolResult.success(objectMapper.writeValueAsString(result));
         } catch (ForbiddenOperationException ex) {
             return errorResult("FORBIDDEN", ex.getMessage(), null);
-        } catch (PlanJobStateException ex) {
+        } catch (GenerationJobStateException ex) {
             return errorResult("JOB_CONFLICT", ex.getMessage(), null);
         } catch (ResourceNotFoundException ex) {
             return errorResult("JOB_NOT_FOUND", ex.getMessage(), null);
         } catch (Exception ex) {
-            log.error("[MCP] Error marcando job como fallido: {}", ex.getMessage(), ex);
+            log.error("[MCP] Error marcando el job como fallido: {}", ex.getMessage(), ex);
             return errorResult("FAIL_JOB_ERROR", ex.getMessage(), null);
         }
     }
@@ -133,7 +135,7 @@ public class TrainingTools {
         String fromToken = principal.requestId();
         if (fromToken != null && !fromToken.isBlank()) {
             if (fromArgs != null && !fromArgs.isBlank() && !fromToken.equals(fromArgs)) {
-                throw new PlanJobStateException(
+                throw new GenerationJobStateException(
                         "requestId del argumento no coincide con el requestId del token");
             }
             return fromToken;
@@ -141,13 +143,14 @@ public class TrainingTools {
         return fromArgs;
     }
 
-    private McpToolResult validationError(PlanValidationException ex) {
+    private McpToolResult validationError(RecommendationValidationException ex) {
         ObjectNode result = objectMapper.createObjectNode();
         result.put("ok", false);
-        result.put("code", "PLAN_INVALID");
+        result.put("code", "RECOMMENDATION_INVALID");
         result.put("message", ex.getMessage());
         result.set("violations", objectMapper.valueToTree(ex.getViolations()));
-        result.put("hint", "Corrige las violaciones y vuelve a llamar a save_weekly_plan con el mismo requestId.");
+        result.put("hint", "Corrige las violaciones y vuelve a llamar a save_daily_recommendation "
+                + "con el mismo requestId.");
         return McpToolResult.error(toJson(result));
     }
 

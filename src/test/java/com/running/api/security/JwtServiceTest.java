@@ -81,8 +81,8 @@ class JwtServiceTest {
     }
 
     @Test
-    void generatesPlanGenerationTokenWithMcpAudienceScopesAndRequestId() {
-        String token = jwtService.generatePlanGenerationToken(
+    void generatesGenerationTokenWithMcpAudienceScopesAndRequestId() {
+        String token = jwtService.generateGenerationToken(
                 user(), "request-123", java.time.Duration.ofMinutes(30));
 
         UserPrincipal principal = jwtService.parseToken(token);
@@ -109,8 +109,8 @@ class JwtServiceTest {
     }
 
     @Test
-    void planGenerationTokenCannotBeUsedAsRefreshToken() {
-        String token = jwtService.generatePlanGenerationToken(
+    void generationTokenCannotBeUsedAsRefreshToken() {
+        String token = jwtService.generateGenerationToken(
                 user(), "request-123", java.time.Duration.ofMinutes(30));
 
         assertThatThrownBy(() -> jwtService.parseRefreshToken(token))

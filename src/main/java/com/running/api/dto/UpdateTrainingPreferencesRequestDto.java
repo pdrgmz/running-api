@@ -2,16 +2,14 @@ package com.running.api.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(description = "Actualización de preferencias de planificación")
+@Schema(description = "Actualización de preferencias de la recomendación diaria")
 public record UpdateTrainingPreferencesRequestDto(
-        @Schema(description = "Activa la generación automática semanal", example = "true")
+        @Schema(description = "Activa la generación automática diaria", example = "true")
         Boolean enabled,
         @Schema(description = "Zona horaria IANA", example = "Europe/Madrid")
         String timezone,
-        @Schema(description = "Sesiones por semana (1-7)", example = "5")
-        Integer daysPerWeek,
-        @Schema(description = "Día preferido para el rodaje largo", example = "SATURDAY")
-        String preferredLongRunDay,
+        @Schema(description = "Hora local (0-23) a la que se genera la recomendación", example = "6")
+        Integer generationHour,
         @Schema(description = "Notas o restricciones para el entrenador/IA")
         String notes
 ) {

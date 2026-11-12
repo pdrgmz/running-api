@@ -1,15 +1,14 @@
 package com.running.api.dto;
 
-import com.running.api.dto.TrainingPlanResponseDto.WorkoutDto;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
-@Schema(description = "Contexto completo que recibe n8n para que el LLM genere el plan semanal")
+@Schema(description = "Contexto completo que recibe n8n para que el LLM recomiende el entrenamiento del día")
 public record TrainingContextDto(
-        LocalDate weekStart,
+        LocalDate date,
         LocalDate today,
         String timezone,
         Preferences preferences,
@@ -17,16 +16,18 @@ public record TrainingContextDto(
         AcwrStatusDto acwr,
         Integer athleteMaxHeartRate,
         List<RecentActivityDto> recentActivities,
+        List<RecentActivityDto> activitiesOnDate,
         List<WeeklySummaryDto> recentWeeks,
         List<RecordResponseDto> personalRecords,
-        CurrentPlan currentPlan
+        DailyRecommendationResponseDto recommendationForDate,
+        List<DailyRecommendationSummaryDto> recentRecommendations
 ) {
 
     public record Preferences(
             boolean configured,
             Boolean enabled,
-            Integer daysPerWeek,
-            String preferredLongRunDay,
+            String timezone,
+            Integer generationHour,
             String notes
     ) {
     }
@@ -53,17 +54,6 @@ public record TrainingContextDto(
             Double durationSeconds,
             Double trainingLoad,
             Double longestRunMeters
-    ) {
-    }
-
-    public record CurrentPlan(
-            String planId,
-            LocalDate weekStart,
-            LocalDate weekEnd,
-            String status,
-            Integer version,
-            String summary,
-            List<WorkoutDto> workouts
     ) {
     }
 }

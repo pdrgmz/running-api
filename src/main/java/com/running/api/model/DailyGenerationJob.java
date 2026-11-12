@@ -17,19 +17,24 @@ import lombok.Setter;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
+/**
+ * Correlación entre una petición de recomendación diaria, el JWT efímero y la
+ * recomendación persistida. El {@code id} es el {@code requestId}.
+ */
 @Entity
-@Table(name = "plan_generation_jobs",
+@Table(name = "daily_recommendation_jobs",
         indexes = {
-                @Index(name = "idx_plan_jobs_user_week", columnList = "user_id,week_start"),
-                @Index(name = "idx_plan_jobs_status_updated", columnList = "status,updated_at")
+                @Index(name = "idx_daily_jobs_user_date", columnList = "user_id,recommendation_date"),
+                @Index(name = "idx_daily_jobs_status_updated", columnList = "status,updated_at")
         })
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@Schema(description = "Job de generación de un plan semanal. La API lo marca COMPLETED en la misma transacción que guarda el plan")
-public class PlanGenerationJob {
+@Schema(description = "Job de generación de una recomendación diaria. La API lo marca COMPLETED "
+        + "en la misma transacción que guarda la recomendación")
+public class DailyGenerationJob {
 
     /** El id es también el requestId que viaja en el JWT y en el webhook de n8n. */
     @Id
@@ -39,8 +44,8 @@ public class PlanGenerationJob {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "week_start", nullable = false)
-    private LocalDate weekStart;
+    @Column(name = "recommendation_date", nullable = false)
+    private LocalDate recommendationDate;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -58,8 +63,8 @@ public class PlanGenerationJob {
     @Column(name = "last_error", columnDefinition = "TEXT")
     private String lastError;
 
-    @Column(name = "plan_id")
-    private String planId;
+    @Column(name = "recommendation_id")
+    private String recommendationId;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
@@ -72,7 +77,4 @@ public class PlanGenerationJob {
 
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
-
-    @Column(name = "expires_at")
-    private LocalDateTime expiresAt;
 }
