@@ -253,7 +253,6 @@ public class DailyRecommendationService {
         recommendation.setSummary(payload.summary());
         recommendation.setAnalysis(payload.analysis());
         recommendation.setCoachNotes(payload.coachNotes());
-        recommendation.setModel(payload.model());
         recommendation.setPromptVersion(payload.promptVersion());
         recommendation.setGeneratedAt(LocalDateTime.now());
     }
@@ -520,7 +519,6 @@ public class DailyRecommendationService {
                         recommendation.getTargetHrZone(),
                         recommendation.getTargetLoad(),
                         recommendation.getMainSet()),
-                recommendation.getModel(),
                 recommendation.getPromptVersion(),
                 recommendation.getGeneratedAt());
     }

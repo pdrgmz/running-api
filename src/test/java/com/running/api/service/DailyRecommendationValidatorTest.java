@@ -23,7 +23,6 @@ class DailyRecommendationValidatorTest {
                 "El ACWR está estable y no hay carga acumulada",
                 "Mantén la respiración cómoda",
                 workout,
-                "gpt-4.1-mini",
                 "daily-recommendation-v1");
     }
 

@@ -259,7 +259,7 @@ esquema de la herramienta es plano porque MCP no anida objetos en `arguments` de
     "arguments": {
       "date": "2026-11-11",
       "replace": false,
-      "recommendationJson": "{\"summary\":\"Rodaje suave de 45 min en Z2\",\"analysis\":\"ACWR en 1.05, 48 h desde la última carrera y carga estable las últimas 4 semanas.\",\"coachNotes\":\"Mantén la respiración cómoda y no mires el ritmo.\",\"workout\":{\"type\":\"EASY\",\"title\":\"Rodaje suave\",\"description\":\"45 min en Z2\",\"targetDistanceMeters\":8000,\"targetDurationSeconds\":2700,\"targetPaceMinPerKm\":5.6,\"targetHrZone\":2,\"targetLoad\":50,\"mainSet\":\"45 min continuos\"},\"model\":\"gpt-4.1-mini\",\"promptVersion\":\"daily-recommendation-v1\"}"
+      "recommendationJson": "{\"summary\":\"Rodaje suave de 45 min en Z2\",\"analysis\":\"ACWR en 1.05, 48 h desde la última carrera y carga estable las últimas 4 semanas.\",\"coachNotes\":\"Mantén la respiración cómoda y no mires el ritmo.\",\"workout\":{\"type\":\"EASY\",\"title\":\"Rodaje suave\",\"description\":\"45 min en Z2\",\"targetDistanceMeters\":8000,\"targetDurationSeconds\":2700,\"targetPaceMinPerKm\":5.6,\"targetHrZone\":2,\"targetLoad\":50,\"mainSet\":\"45 min continuos\"},\"promptVersion\":\"daily-recommendation-v1\"}"
     }
   }
 }
@@ -282,7 +282,7 @@ Contrato de `recommendationJson`:
 | `workout.targetHrZone` | integer (1-5) | No |
 | `workout.targetLoad` | number | No |
 | `workout.mainSet` | string | No |
-| `model` / `promptVersion` | string | No |
+| `promptVersion` | string | No |
 
 Tipos válidos: `EASY`, `RECOVERY`, `LONG_RUN`, `TEMPO`, `INTERVALS`, `HILLS`, `RACE_PACE`, `RACE`,
 `CROSS_TRAINING`, `REST`, `OTHER`. En un día de descanso usa `type=REST` con un título como

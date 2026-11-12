@@ -16,7 +16,6 @@ public record DailyRecommendationResponseDto(
         String analysis,
         String coachNotes,
         WorkoutDto workout,
-        String model,
         String promptVersion,
         LocalDateTime generatedAt
 ) {

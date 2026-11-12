@@ -20,8 +20,6 @@ public record DailyRecommendationPayload(
         String coachNotes,
         @Schema(description = "Sesión recomendada para el día")
         WorkoutPayload workout,
-        @Schema(description = "Modelo de IA usado")
-        String model,
         @Schema(description = "Versión del prompt usado")
         String promptVersion
 ) {

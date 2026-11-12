@@ -245,7 +245,6 @@ class DailyRecommendationServiceTest {
                 "Mantén la respiración cómoda",
                 new WorkoutPayload(WorkoutType.EASY, "Rodaje suave", "45 min en Z2",
                         8000.0, 2700.0, 5.6, 2, 50.0, "45 min continuos"),
-                "gpt-4.1-mini",
                 "daily-recommendation-v1");
     }
 }

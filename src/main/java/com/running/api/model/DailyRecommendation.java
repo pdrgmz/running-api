@@ -109,10 +109,6 @@ public class DailyRecommendation {
     @Schema(description = "Consejos del entrenador/IA para ejecutar la sesión")
     private String coachNotes;
 
-    @Column(name = "model")
-    @Schema(description = "Modelo de IA usado", example = "gpt-4.1-mini")
-    private String model;
-
     @Column(name = "prompt_version")
     @Schema(description = "Versión del prompt usado", example = "daily-recommendation-v1")
     private String promptVersion;

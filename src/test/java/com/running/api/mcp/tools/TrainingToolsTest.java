@@ -155,7 +155,7 @@ class TrainingToolsTest {
                 "Rodaje suave", "ACWR estable", "Notas",
                 new WorkoutPayload(WorkoutType.EASY, "Rodaje suave", "45 min",
                         8000.0, 2700.0, 5.6, 2, 50.0, "45 min"),
-                "gpt-4.1-mini", "daily-recommendation-v1");
+                "daily-recommendation-v1");
     }
 
     private DailyRecommendationResponseDto response() {
@@ -165,6 +165,6 @@ class TrainingToolsTest {
                 new DailyRecommendationResponseDto.WorkoutDto(
                         WorkoutType.EASY, "Rodaje suave", "45 min",
                         8000.0, 2700.0, 5.6, 2, 50.0, "45 min"),
-                "gpt-4.1-mini", "daily-recommendation-v1", LocalDateTime.now());
+                "daily-recommendation-v1", LocalDateTime.now());
     }
 }
