@@ -96,6 +96,9 @@ app:
       reconcile-cron: ${APP_TRAINING_DAILY_RECONCILE_CRON:0 */10 * * * *}
       webhook-timeout-seconds: ${APP_TRAINING_DAILY_WEBHOOK_TIMEOUT_SECONDS:20}
     activity-analysis:
+      # Lanza el análisis automáticamente al importar una actividad nueva (individual o masiva).
+      # Si el webhook no está configurado o falla, la importación no se ve afectada.
+      auto-analyze-on-import: ${APP_TRAINING_ACTIVITY_ANALYSIS_AUTO_ON_IMPORT:true}
       # Webhook de n8n que recibe {requestId, activityId, replace, mcpUrl} y el JWT efímero.
       # Sin ella, POST /api/v1/activities/{id}/analyze responde 503.
       n8n-webhook-url: ${APP_TRAINING_ACTIVITY_ANALYSIS_N8N_WEBHOOK_URL:}

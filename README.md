@@ -62,9 +62,10 @@
 - Si falta altitud, un cron la completa con el modelo digital de elevaciones de Open-Meteo
   a partir de las coordenadas GPS, respetando la cuota del proveedor
 - Eliminación individual o total de la base de datos
-- **Análisis de actividad con IA** — un endpoint lanza un job de n8n que analiza una carrera
-  (ritmo, splits, zonas de FC, carga, VO2Max) y guarda el resultado en la propia actividad
-  (`aiAnalysis`); el job se sigue por `requestId` y el guardado lo hace n8n vía MCP
+- **Análisis de actividad con IA** — al importar una actividad nueva (individual o masiva) se
+  lanza automáticamente un job de n8n que la analiza (ritmo, splits, zonas de FC, carga, VO2Max)
+  y guarda el resultado en la propia actividad (`aiAnalysis`). También se puede lanzar a mano con
+  `POST /{id}/analyze`; el job se sigue por `requestId` y el guardado lo hace n8n vía MCP
 
 ### Estadísticas y Récords
 - Resumen global acumulado (distancia, tiempo, desnivel, calorías)
@@ -290,6 +291,7 @@ src/main/java/com/running/api/
 | `APP_TRAINING_DAILY_RETRY_BACKOFF_MILLIS` | `2000` | Backoff entre reintentos del webhook |
 | `APP_TRAINING_DAILY_RECONCILE_CRON` | `0 */10 * * * *` | Cron de reconciliación de jobs caducados |
 | `APP_TRAINING_DAILY_WEBHOOK_TIMEOUT_SECONDS` | `20` | Timeout de la llamada de la API al webhook (no espera al LLM) |
+| `APP_TRAINING_ACTIVITY_ANALYSIS_AUTO_ON_IMPORT` | `true` | Lanza el análisis automáticamente al importar una actividad (individual o masiva) |
 | `APP_TRAINING_ACTIVITY_ANALYSIS_N8N_WEBHOOK_URL` | *(vacío)* | Webhook de n8n para analizar actividades. Sin ella, `POST /activities/{id}/analyze` responde `503` |
 | `APP_TRAINING_ACTIVITY_ANALYSIS_MCP_URL` | `http://localhost:8080/mcp` | URL del MCP tal como la ve n8n (se envía en el body del webhook) |
 | `APP_TRAINING_ACTIVITY_ANALYSIS_TOKEN_TTL_MINUTES` | `45` | Vigencia del JWT efímero entregado a n8n para el análisis |
@@ -365,6 +367,7 @@ app:
       reconcile-cron: ${APP_TRAINING_DAILY_RECONCILE_CRON:0 */10 * * * *}
       webhook-timeout-seconds: ${APP_TRAINING_DAILY_WEBHOOK_TIMEOUT_SECONDS:20}
     activity-analysis:
+      auto-analyze-on-import: ${APP_TRAINING_ACTIVITY_ANALYSIS_AUTO_ON_IMPORT:true}
       n8n-webhook-url: ${APP_TRAINING_ACTIVITY_ANALYSIS_N8N_WEBHOOK_URL:}
       mcp-url: ${APP_TRAINING_ACTIVITY_ANALYSIS_MCP_URL:http://localhost:8080/mcp}
       token-ttl-minutes: ${APP_TRAINING_ACTIVITY_ANALYSIS_TOKEN_TTL_MINUTES:45}
@@ -705,6 +708,11 @@ contrato; el resto de límites (horario, diario y mensual) sigue aplicando.
 La API no analiza nada: crea el job, firma un JWT efímero (`aud=mcp`, scopes
 `activity:read activity:write`, `requestId`) y lo envía al webhook de n8n. El análisis solo se
 guarda en la actividad cuando n8n llama a `save_activity_analysis`.
+
+**Al importar una actividad nueva** (`POST /api/v1/files/upload` o `/upload-bulk`) el análisis se
+lanza automáticamente, después del commit y con las métricas finales ya calculadas. Se puede
+desactivar con `APP_TRAINING_ACTIVITY_ANALYSIS_AUTO_ON_IMPORT=false`. Si el webhook no está
+configurado o falla, la importación **no** se ve afectada: solo se registra un aviso.
 
 ```bash
 # Lanzar el análisis (202 Accepted)

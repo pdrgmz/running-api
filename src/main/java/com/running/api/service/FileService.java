@@ -1,6 +1,7 @@
 package com.running.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.running.api.event.ActivityCreatedEvent;
 import com.running.api.model.Activity;
 import com.running.api.model.GlobalSummaryStats;
 import com.running.api.repository.ActivityRepository;
@@ -9,6 +10,7 @@ import com.running.api.util.RunningMetrics;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -49,6 +51,7 @@ public class FileService {
     private final BulkUploadStatusTracker bulkUploadStatusTracker;
     private final TrackpointCompletionService trackpointCompletionService;
     private final PlatformTransactionManager transactionManager;
+    private final ApplicationEventPublisher eventPublisher;
 
     private final Executor zipExecutor;
 
@@ -65,6 +68,7 @@ public class FileService {
                        BulkUploadStatusTracker bulkUploadStatusTracker,
                        TrackpointCompletionService trackpointCompletionService,
                        PlatformTransactionManager transactionManager,
+                       ApplicationEventPublisher eventPublisher,
                        @Qualifier("zipExecutor") Executor zipExecutor) {
         this.activityRepository = activityRepository;
         this.tcxParserService = tcxParserService;
@@ -79,6 +83,7 @@ public class FileService {
         this.bulkUploadStatusTracker = bulkUploadStatusTracker;
         this.trackpointCompletionService = trackpointCompletionService;
         this.transactionManager = transactionManager;
+        this.eventPublisher = eventPublisher;
         this.zipExecutor = zipExecutor;
     }
 
@@ -96,6 +101,9 @@ public class FileService {
 
         recalculateAllStats(saved.getUserId());
         statsService.checkAndSetPersonalRecords(saved);
+
+        // El análisis con n8n se lanza después del commit (ver ActivityAnalysisListener).
+        eventPublisher.publishEvent(new ActivityCreatedEvent(saved.getUserId(), saved.getId()));
         return saved;
     }
 
@@ -155,7 +163,7 @@ public class FileService {
      * Guarda una actividad sin recalcular estadísticas ni records personales.
      * Usado en la importación masiva en paralelo donde los stats se calculan al final.
      */
-    private void saveActivityWithoutStats(InputStream is, String fileType, Long userId) throws Exception {
+    private Activity saveActivityWithoutStats(InputStream is, String fileType, Long userId) throws Exception {
         byte[] bytes = is.readAllBytes();
         Activity activity = parseFile(new ByteArrayInputStream(bytes), fileType);
         activity.setSourceFileType(fileType);
@@ -170,6 +178,7 @@ public class FileService {
         // Los cambios se persisten por dirty checking; las estadísticas globales se
         // recalculan una sola vez al finalizar todo el ZIP.
         trackpointCompletionService.completeAfterImport(saved);
+        return saved;
     }
 
     private Activity parseFile(InputStream is, String fileType) throws Exception {
@@ -262,24 +271,25 @@ public class FileService {
         }
 
         // 2. Procesar archivos en paralelo (sin recalcular stats por archivo)
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        List<CompletableFuture<String>> futures = new ArrayList<>();
         for (ZipFileData fileData : filesToProcess) {
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+            CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
                 try {
                     log.debug("[{}] [{}] Procesando archivo: {} ({} bytes)", 
                             uploadId, Thread.currentThread().getName(), fileData.fileName, fileData.data.length);
                     TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
-                    txTemplate.execute(status -> {
+                    String activityId = txTemplate.execute(status -> {
                         try {
-                            saveActivityWithoutStats(new ByteArrayInputStream(fileData.data), fileData.fileType, userId);
+                            return saveActivityWithoutStats(
+                                    new ByteArrayInputStream(fileData.data), fileData.fileType, userId).getId();
                         } catch (Exception e) {
                             throw new RuntimeException(e.getMessage(), e);
                         }
-                        return null;
                     });
                     log.debug("[{}] [{}] Archivo exitoso: {}", 
                             uploadId, Thread.currentThread().getName(), fileData.fileName);
                     bulkUploadStatusTracker.incrementProcessed(uploadId, true);
+                    return activityId;
                 } catch (Exception ex) {
                     String msg = ex.getCause() != null && ex.getCause().getMessage() != null
                             ? ex.getCause().getMessage()
@@ -288,6 +298,7 @@ public class FileService {
                             uploadId, Thread.currentThread().getName(), fileData.fileName, msg);
                     bulkUploadStatusTracker.incrementProcessed(uploadId, false);
                     bulkUploadStatusTracker.addError(uploadId, fileData.fileName, msg);
+                    return null;
                 }
             }, zipExecutor);
             futures.add(future);
@@ -308,6 +319,15 @@ public class FileService {
         } catch (Exception e) {
             bulkUploadStatusTracker.addError(uploadId, "final-stats", "Error al recalcular estadísticas finales: " + e.getMessage());
             log.error("[{}] Error al recalcular estadísticas: {}", uploadId, e.getMessage());
+        }
+
+        // 4. Lanzar el análisis de cada actividad creada, ya con las métricas finales.
+        //    El listener se ejecuta después del commit y de forma asíncrona.
+        for (CompletableFuture<String> future : futures) {
+            String activityId = future.getNow(null);
+            if (activityId != null) {
+                eventPublisher.publishEvent(new ActivityCreatedEvent(userId, activityId));
+            }
         }
     }
 
