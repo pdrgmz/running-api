@@ -141,7 +141,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const raw = $json?.result?.content?.[0]?.text;\nlet result = {};\ntry { result = raw ? JSON.parse(raw) : {}; } catch (e) { result = { ok: false, message: 'Respuesta MCP no es JSON: ' + raw }; }\nconst p = $('Preparar llamadas MCP').item.json;\nreturn [{ json: { ...p, saveResult: result, saved: result.ok === true, analysis: result.analysis || null, failError: result.ok === true ? null : (result.message || JSON.stringify(result)) } }];"
+        "jsCode": "const raw = $json?.result?.content?.[0]?.text;\nlet result = {};\ntry { result = raw ? JSON.parse(raw) : {}; } catch (e) { result = { ok: false, message: 'Respuesta MCP no es JSON: ' + raw }; }\nconst p = $('Preparar llamadas MCP').first().json;\nlet generated = {};\ntry { generated = $('Extraer análisis JSON').first().json; } catch (e) { generated = {}; }\n// El análisis puede venir del nodo que lo generó o de la respuesta de save_activity_analysis.\nlet analysis = generated.analysis ?? result.analysis ?? null;\nlet analysisJson = generated.analysisJson ?? result.analysisJson ?? null;\nif (!analysis && analysisJson) { try { analysis = JSON.parse(analysisJson); } catch (e) { analysis = null; } }\nif (!analysisJson && analysis) { analysisJson = JSON.stringify(analysis); }\nreturn [{ json: { ...p, saveResult: result, saved: result.ok === true, analysis, analysisJson, failError: result.ok === true ? null : (result.message || JSON.stringify(result)) } }];"
       },
       "id": "2a8f3c2a-2000-4000-8000-000000000009",
       "name": "Parsear guardado",
@@ -183,7 +183,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const a = $json.analysis;\nif (!a) throw new Error('No hay análisis guardado para el mensaje');\nconst lines = ['🏃 Análisis de la actividad ' + $json.activityId];\nif (a.summary) lines.push('', a.summary);\nif (Array.isArray(a.strengths) && a.strengths.length) lines.push('', '✅ Puntos fuertes:', ...a.strengths.map(s => '• ' + s));\nif (Array.isArray(a.weaknesses) && a.weaknesses.length) lines.push('', '⚠️ Áreas de mejora:', ...a.weaknesses.map(s => '• ' + s));\nif (Array.isArray(a.recommendations) && a.recommendations.length) lines.push('', '💡 Recomendaciones:', ...a.recommendations.map(s => '• ' + s));\nreturn [{ json: { telegramText: lines.join('\\n') } }];"
+        "jsCode": "let a = $json.analysis;\nif (!a && $json.analysisJson) { try { a = JSON.parse($json.analysisJson); } catch (e) { a = null; } }\nif (!a) throw new Error('No hay análisis guardado para el mensaje');\nif (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = { summary: a }; } }\nconst lines = ['🏃 Análisis de la actividad ' + $json.activityId];\nif (a.summary) lines.push('', a.summary);\nif (Array.isArray(a.strengths) && a.strengths.length) lines.push('', '✅ Puntos fuertes:', ...a.strengths.map(s => '• ' + s));\nif (Array.isArray(a.weaknesses) && a.weaknesses.length) lines.push('', '⚠️ Áreas de mejora:', ...a.weaknesses.map(s => '• ' + s));\nif (Array.isArray(a.recommendations) && a.recommendations.length) lines.push('', '💡 Recomendaciones:', ...a.recommendations.map(s => '• ' + s));\nreturn [{ json: { telegramText: lines.join('\\n') } }];"
       },
       "id": "2a8f3c2a-2000-4000-8000-00000000000b",
       "name": "Mensaje análisis",

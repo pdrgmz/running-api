@@ -58,6 +58,11 @@ public class ActivityAnalysisTools {
             result.put("requestId", job.getId());
             result.put("activityId", job.getActivityId());
             result.put("status", job.getStatus().name());
+            // Se devuelve también el análisis guardado para que n8n pueda usarlo en el
+            // mismo paso (p. ej. para el mensaje de Telegram) sin depender de nodos previos.
+            String stored = job.getAnalysisResult() != null ? job.getAnalysisResult() : analysisJson;
+            result.put("analysisJson", stored);
+            result.set("analysis", toJsonNode(stored));
             return McpToolResult.success(objectMapper.writeValueAsString(result));
         } catch (AnalysisJobStateException ex) {
             return errorResult("JOB_CONFLICT", ex.getMessage(), null);
@@ -129,6 +134,22 @@ public class ActivityAnalysisTools {
             return objectMapper.writeValueAsString(node);
         } catch (Exception ex) {
             return "{\"ok\":false,\"code\":\"SERIALIZATION_ERROR\"}";
+        }
+    }
+
+    /**
+     * Convierte el análisis almacenado en un nodo JSON. Si el análisis es JSON
+     * válido se devuelve tal cual; si es texto libre se devuelve como string.
+     */
+    private JsonNode toJsonNode(String analysis) {
+        if (analysis == null || analysis.isBlank()) {
+            return objectMapper.nullNode();
+        }
+        try {
+            JsonNode node = objectMapper.readTree(analysis);
+            return node == null ? objectMapper.nullNode() : node;
+        } catch (Exception ex) {
+            return objectMapper.getNodeFactory().textNode(analysis);
         }
     }
 
