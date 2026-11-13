@@ -73,6 +73,23 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.BAD_GATEWAY, ex.getMessage(), request);
     }
 
+    @ExceptionHandler(AnalysisJobStateException.class)
+    public ResponseEntity<ErrorResponseDto> handleAnalysisJobState(
+            AnalysisJobStateException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(AnalysisNotConfiguredException.class)
+    public ResponseEntity<ErrorResponseDto> handleAnalysisNotConfigured(
+            AnalysisNotConfiguredException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(AnalysisException.class)
+    public ResponseEntity<ErrorResponseDto> handleAnalysis(AnalysisException ex, HttpServletRequest request) {
+        return buildError(HttpStatus.BAD_GATEWAY, ex.getMessage(), request);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponseDto> handleBadRequest(IllegalArgumentException ex, HttpServletRequest request) {
         return buildError(HttpStatus.BAD_REQUEST, ex.getMessage(), request);

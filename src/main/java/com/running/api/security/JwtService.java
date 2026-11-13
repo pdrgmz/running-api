@@ -56,6 +56,12 @@ public class JwtService {
     public static final String GENERATION_SCOPES =
             SCOPE_TRAINING_READ + " " + SCOPE_TRAINING_WRITE;
 
+    /** Scopes del token efímero que usa n8n para analizar una actividad. */
+    public static final String SCOPE_ACTIVITY_READ = "activity:read";
+    public static final String SCOPE_ACTIVITY_WRITE = "activity:write";
+    public static final String ANALYSIS_SCOPES =
+            SCOPE_ACTIVITY_READ + " " + SCOPE_ACTIVITY_WRITE;
+
     private final SecretKey key;
     private final long accessExpirationMillis;
     private final long refreshExpirationMillis;
@@ -100,6 +106,29 @@ public class JwtService {
                 .claim("role", user.getRole())
                 .claim(TYPE_CLAIM, TokenType.GENERATION.name())
                 .claim(SCOPE_CLAIM, GENERATION_SCOPES)
+                .claim(REQUEST_ID_CLAIM, requestId)
+                .audience().add(MCP_AUDIENCE).and()
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(now.plus(ttl)))
+                .signWith(key)
+                .compact();
+    }
+
+    /**
+     * Token efímero para que n8n analice una actividad y guarde el resultado.
+     * <p>
+     * La identidad sigue siendo el {@code sub} del usuario. El token solo es
+     * aceptado en {@code /mcp} y lleva el {@code requestId} del job para
+     * correlacionar el guardado del análisis.
+     */
+    public String generateAnalysisToken(User user, String requestId, Duration ttl) {
+        Instant now = Instant.now();
+        return Jwts.builder()
+                .subject(String.valueOf(user.getId()))
+                .claim("email", user.getEmail())
+                .claim("role", user.getRole())
+                .claim(TYPE_CLAIM, TokenType.GENERATION.name())
+                .claim(SCOPE_CLAIM, ANALYSIS_SCOPES)
                 .claim(REQUEST_ID_CLAIM, requestId)
                 .audience().add(MCP_AUDIENCE).and()
                 .issuedAt(Date.from(now))

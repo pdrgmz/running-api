@@ -62,6 +62,9 @@
 - Si falta altitud, un cron la completa con el modelo digital de elevaciones de Open-Meteo
   a partir de las coordenadas GPS, respetando la cuota del proveedor
 - Eliminación individual o total de la base de datos
+- **Análisis de actividad con IA** — un endpoint lanza un job de n8n que analiza una carrera
+  (ritmo, splits, zonas de FC, carga, VO2Max) y guarda el resultado en la propia actividad
+  (`aiAnalysis`); el job se sigue por `requestId` y el guardado lo hace n8n vía MCP
 
 ### Estadísticas y Récords
 - Resumen global acumulado (distancia, tiempo, desnivel, calorías)
@@ -172,6 +175,7 @@ src/main/java/com/running/api/
 │   ├── McpToolResult.java       # Resultado con isError para el agente
 │   └── tools/
 │       ├── ActivityTools.java
+│       ├── ActivityAnalysisTools.java # Guardado del análisis y fallo de job
 │       ├── AnalyticsTools.java
 │       ├── StatsTools.java
 │       └── TrainingTools.java   # Contexto, recomendación diaria y fallo de job
@@ -183,6 +187,7 @@ src/main/java/com/running/api/
 │   ├── PersonalRecord.java      # Récords personales por distancia (por usuario)
 │   ├── DailyRecommendation.java # Recomendación diaria validada (una por día)
 │   ├── DailyGenerationJob.java  # Job de generación (requestId, estado, recomendación)
+│   ├── ActivityAnalysisJob.java # Job de análisis de actividad (requestId, estado, resultado)
 │   ├── TrainingPreferences.java # Activación, zona horaria y hora de generación
 │   ├── WorkoutType.java / TrainingJobStatus.java / TrainingJobSource.java
 │   └── User.java                # Usuario (email + hash de contraseña + rol)
@@ -222,6 +227,9 @@ src/main/java/com/running/api/
 │   ├── DailyRecommendationGenerationService.java # Job + JWT efímero + webhook n8n
 │   ├── DailyRecommendationScheduler.java # Barrido horario y reconciliación de jobs
 │   ├── N8nDailyWebhookClient.java       # Cliente HTTP del webhook de n8n
+│   ├── ActivityAnalysisService.java     # Jobs, guardado del análisis y consultas
+│   ├── ActivityAnalysisGenerationService.java # Job + JWT efímero + webhook n8n
+│   ├── N8nActivityAnalysisWebhookClient.java  # Cliente HTTP del webhook de análisis
 │   ├── TcxParserService.java
 │   ├── TrackpointCompletionService.java # Completa huecos de telemetría al importar
 │   ├── ElevationProvider.java           # Puerto de proveedores de elevación
@@ -282,6 +290,12 @@ src/main/java/com/running/api/
 | `APP_TRAINING_DAILY_RETRY_BACKOFF_MILLIS` | `2000` | Backoff entre reintentos del webhook |
 | `APP_TRAINING_DAILY_RECONCILE_CRON` | `0 */10 * * * *` | Cron de reconciliación de jobs caducados |
 | `APP_TRAINING_DAILY_WEBHOOK_TIMEOUT_SECONDS` | `20` | Timeout de la llamada de la API al webhook (no espera al LLM) |
+| `APP_TRAINING_ACTIVITY_ANALYSIS_N8N_WEBHOOK_URL` | *(vacío)* | Webhook de n8n para analizar actividades. Sin ella, `POST /activities/{id}/analyze` responde `503` |
+| `APP_TRAINING_ACTIVITY_ANALYSIS_MCP_URL` | `http://localhost:8080/mcp` | URL del MCP tal como la ve n8n (se envía en el body del webhook) |
+| `APP_TRAINING_ACTIVITY_ANALYSIS_TOKEN_TTL_MINUTES` | `45` | Vigencia del JWT efímero entregado a n8n para el análisis |
+| `APP_TRAINING_ACTIVITY_ANALYSIS_MAX_ATTEMPTS` | `3` | Reintentos del webhook de n8n al crear el job de análisis |
+| `APP_TRAINING_ACTIVITY_ANALYSIS_RETRY_BACKOFF_MILLIS` | `2000` | Backoff entre reintentos del webhook de análisis |
+| `APP_TRAINING_ACTIVITY_ANALYSIS_WEBHOOK_TIMEOUT_SECONDS` | `20` | Timeout de la llamada de la API al webhook de análisis |
 
 > `APP_TRAINING_DAILY_MCP_URL` se resuelve **desde el contenedor/host de n8n**, no desde la API. Si
 > n8n no comparte red con la API, `http://localhost:8080/mcp` y `http://running-api:8080/mcp` no
@@ -350,6 +364,13 @@ app:
       job-timeout-minutes: ${APP_TRAINING_DAILY_JOB_TIMEOUT_MINUTES:60}
       reconcile-cron: ${APP_TRAINING_DAILY_RECONCILE_CRON:0 */10 * * * *}
       webhook-timeout-seconds: ${APP_TRAINING_DAILY_WEBHOOK_TIMEOUT_SECONDS:20}
+    activity-analysis:
+      n8n-webhook-url: ${APP_TRAINING_ACTIVITY_ANALYSIS_N8N_WEBHOOK_URL:}
+      mcp-url: ${APP_TRAINING_ACTIVITY_ANALYSIS_MCP_URL:http://localhost:8080/mcp}
+      token-ttl-minutes: ${APP_TRAINING_ACTIVITY_ANALYSIS_TOKEN_TTL_MINUTES:45}
+      max-attempts: ${APP_TRAINING_ACTIVITY_ANALYSIS_MAX_ATTEMPTS:3}
+      retry-backoff-millis: ${APP_TRAINING_ACTIVITY_ANALYSIS_RETRY_BACKOFF_MILLIS:2000}
+      webhook-timeout-seconds: ${APP_TRAINING_ACTIVITY_ANALYSIS_WEBHOOK_TIMEOUT_SECONDS:20}
 ```
 
 ---
@@ -556,6 +577,9 @@ Al arrancar, si no existe, se crea un usuario administrador (`APP_ADMIN_EMAIL` /
 | `DELETE` | `/` | Vaciar toda la base (asíncrono; devuelve `202` con un `deleteId`) |
 | `GET` | `/delete-status/{deleteId}` | Consultar el progreso del vaciado |
 | `POST` | `/recalculate-metrics` | Recalcular training load, VO2Max y VAM de todas las actividades con la FC máx del atleta |
+| `POST` | `/{id}/analyze` | Lanzar el análisis de una actividad con n8n (`202`). Body opcional: `replace` |
+| `GET` | `/{id}/analysis` | Obtener la actividad con su análisis IA guardado |
+| `GET` | `/{id}/analysis/jobs/{requestId}` | Consultar el estado de un job de análisis |
 
 ### Actividades globales (`/api/v1/activities`)
 
@@ -674,6 +698,52 @@ La aplicación cambia automáticamente de `api.open-meteo.com` a
 clave como parámetro `apikey`. La clave nunca se escribe en los logs. Con un plan de pago puedes
 subir `APP_ELEVATION_MAX_CALLS_PER_MINUTE` y `APP_ELEVATION_BACKFILL_MAX_CALLS_PER_RUN` según tu
 contrato; el resto de límites (horario, diario y mensual) sigue aplicando.
+
+#### Análisis de actividad con IA
+
+`POST /api/v1/activities/{id}/analyze` lanza un job de n8n para analizar una carrera concreta.
+La API no analiza nada: crea el job, firma un JWT efímero (`aud=mcp`, scopes
+`activity:read activity:write`, `requestId`) y lo envía al webhook de n8n. El análisis solo se
+guarda en la actividad cuando n8n llama a `save_activity_analysis`.
+
+```bash
+# Lanzar el análisis (202 Accepted)
+curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/analyze \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Regenerar sobrescribiendo un análisis previo
+curl -X POST http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/analyze \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"replace":true}'
+
+# Consultar el estado del job
+curl http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/analysis/jobs/<requestId> \
+  -H "Authorization: Bearer <token>"
+
+# Leer la actividad con el análisis guardado (campo aiAnalysis)
+curl http://localhost:8080/api/v1/activities/2026-09-05T07:00:00Z/analysis \
+  -H "Authorization: Bearer <token>"
+```
+
+Flujo interno:
+
+1. `POST /{id}/analyze` valida que la actividad pertenece al usuario, crea un
+   `ActivityAnalysisJob` (`PENDING`) y responde `202`.
+2. La API firma un JWT efímero y llama al webhook de n8n con
+   `{requestId, activityId, replace, mcpUrl}`.
+3. El **AI Agent** de n8n llama a `get_activity_by_id`, `get_splits`, `get_hr_zones`,
+   `get_training_load` y `get_vo2max` a través del **MCP Client Tool**.
+4. n8n envía el análisis a `save_activity_analysis`; la API lo guarda en
+   `Activity.aiAnalysis` y marca el job `COMPLETED` en la misma transacción.
+5. Si n8n no puede terminar, llama a `fail_activity_analysis_job`.
+
+Estados del job: `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT`. Sin `replace=true`,
+una actividad que ya tiene análisis devuelve `409`; con `replace=true` se sobrescribe.
+El workflow listo para importar está en
+[`docs/n8n/activity-analysis.json`](docs/n8n/activity-analysis.json).
 
 ### Estadísticas (`/api/v1/stats`)
 
@@ -835,6 +905,12 @@ El workflow listo para importar está en
 **agnóstico al usuario**: recibe el JWT en `Authorization`, lee `mcpUrl` del body y usa ese mismo
 token para las llamadas MCP.
 
+El workflow de **análisis de actividad** está en
+[`docs/n8n/activity-analysis.json`](docs/n8n/activity-analysis.json) y sigue el mismo patrón:
+recibe `{requestId, activityId, replace, mcpUrl}`, analiza la actividad con las herramientas MCP
+y guarda el resultado con `save_activity_analysis`. Requiere las mismas credenciales de OpenAI y
+Telegram y las variables `TELEGRAM_CHAT_ID` / `RUNNING_API_MCP_URL`.
+
 Arquitectura:
 
 - **AI Agent** de n8n con un **OpenAI Chat Model**.
@@ -893,8 +969,10 @@ webhook de n8n debe configurarse en `APP_TRAINING_DAILY_N8N_WEBHOOK_URL`, por ej
 
 > El servidor MCP se autentica con el **mismo JWT** que la API REST. Las herramientas MCP
 > operan sobre las actividades del usuario dueño del token. Desde la versión 1.8.0 incluye
-> `get_training_context`, `save_daily_recommendation` y `fail_generation_job`; `tools/list` y
-> `tools/call` son *stateless* (no requieren `Mcp-Session-Id`), pensados para ser llamados desde n8n.
+> `get_training_context`, `save_daily_recommendation` y `fail_generation_job`; desde la versión
+> 1.9.0 añade `save_activity_analysis` y `fail_activity_analysis_job` para el análisis de
+> actividades. `tools/list` y `tools/call` son *stateless* (no requieren `Mcp-Session-Id`),
+> pensados para ser llamados desde n8n.
 
 ---
 
@@ -934,6 +1012,7 @@ Entidad principal que representa una carrera con sus métricas consolidadas.
 | `backupFilePath` | String | Ruta del archivo de respaldo |
 | `sourceFileType` | String | Tipo de archivo fuente (tcx, gpx, fit) |
 | `extraData` | String | Datos adicionales en JSON del formato de origen |
+| `aiAnalysis` | String | Análisis de la actividad generado por IA (texto o JSON) |
 | `trackpoints` | List | Puntos de telemetría (LAZY) |
 
 ### ActivityTrackpoint
@@ -1024,6 +1103,21 @@ Correlación entre la petición, el JWT efímero y la recomendación guardada. E
 | `source` | TrainingJobSource | `SCHEDULED` o `MANUAL` |
 | `attempts` | Integer | Intentos de guardado |
 | `recommendationId` | String | Recomendación resultante |
+| `lastError` | String | Último error reportado |
+| `createdAt` / `startedAt` / `completedAt` | LocalDateTime | Trazabilidad |
+
+### ActivityAnalysisJob
+Correlación entre una petición de análisis de actividad, el JWT efímero y el resultado guardado en
+la actividad. El `id` es el `requestId`.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | String | `requestId` (UUID) |
+| `userId` / `activityId` | | Propietario y actividad analizada |
+| `status` | TrainingJobStatus | `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT` |
+| `source` | TrainingJobSource | `SCHEDULED` o `MANUAL` |
+| `attempts` | Integer | Intentos de guardado |
+| `analysisResult` | String | Análisis guardado en la actividad |
 | `lastError` | String | Último error reportado |
 | `createdAt` / `startedAt` / `completedAt` | LocalDateTime | Trazabilidad |
 

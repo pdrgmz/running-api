@@ -14,16 +14,21 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.running.api.dto.ActivityAnalysisJobResponseDto;
 import com.running.api.dto.ActivityDeletionStatusDto;
+import com.running.api.dto.AnalyzeActivityRequestDto;
+import com.running.api.dto.AnalyzeActivityResponseDto;
 import com.running.api.dto.ErrorResponseDto;
 import com.running.api.dto.MetricsRecalculationResponseDto;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
 import com.running.api.security.UserPrincipal;
+import com.running.api.service.ActivityAnalysisGenerationService;
 import com.running.api.service.ActivityDeletionStatusTracker;
 import com.running.api.service.ActivityService;
 import com.running.api.service.MetricsRecalculationService;
@@ -46,6 +51,7 @@ public class ActivityController {
         private final ActivityService activityService;
         private final ActivityDeletionStatusTracker deletionStatusTracker;
         private final MetricsRecalculationService metricsRecalculationService;
+        private final ActivityAnalysisGenerationService analysisGenerationService;
 
         @GetMapping
         @Operation(summary = "Listar las carreras del usuario autenticado", description = "Devuelve una página de actividades ordenada por fecha de inicio descendente. Soporta paginación y ordenación mediante los parámetros page, size y sort.")
@@ -152,5 +158,59 @@ public class ActivityController {
                 return ResponseEntity.ok(Map.of(
                                 "message", "Carrera eliminada con éxito",
                                 "activityId", id));
+        }
+
+        @PostMapping("/{id}/analyze")
+        @Operation(summary = "Analizar una carrera con IA",
+                        description = "Crea un job, firma un JWT efímero con aud=mcp y lo envía al webhook de n8n "
+                                        + "para que analice la actividad. Responde 202; el estado se consulta en "
+                                        + "GET /api/v1/activities/{id}/analysis/jobs/{requestId}. El análisis solo se "
+                                        + "guarda en la actividad cuando n8n llama a save_activity_analysis.")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "202", description = "Análisis encolado"),
+                        @ApiResponse(responseCode = "404", description = "La actividad no existe o no pertenece al usuario", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+                        @ApiResponse(responseCode = "409", description = "Ya hay un análisis o un job en curso para esa actividad", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class))),
+                        @ApiResponse(responseCode = "503", description = "El webhook de n8n no está configurado", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+        })
+        public ResponseEntity<AnalyzeActivityResponseDto> analyzeActivity(
+                        @AuthenticationPrincipal UserPrincipal principal,
+                        @Parameter(description = "ID de la actividad a analizar", example = "2026-09-05T07:00:00Z") @PathVariable String id,
+                        @RequestBody(required = false) AnalyzeActivityRequestDto request) {
+                boolean replace = request != null && Boolean.TRUE.equals(request.replace());
+                AnalyzeActivityResponseDto response = analysisGenerationService.analyzeNow(
+                                principal.id(), id, replace);
+                return ResponseEntity.accepted().body(response);
+        }
+
+        @GetMapping("/{id}/analysis")
+        @Operation(summary = "Obtener el análisis guardado de una carrera")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "200", description = "Actividad con su análisis"),
+                        @ApiResponse(responseCode = "404", description = "La actividad no existe o no pertenece al usuario", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+        })
+        public ResponseEntity<Activity> getActivityAnalysis(
+                        @AuthenticationPrincipal UserPrincipal principal,
+                        @Parameter(description = "ID de la actividad", example = "2026-09-05T07:00:00Z") @PathVariable String id) {
+                return activityService.getActivityById(principal.id(), id)
+                                .map(ResponseEntity::ok)
+                                .orElse(ResponseEntity.notFound().build());
+        }
+
+        @GetMapping("/{id}/analysis/jobs/{requestId}")
+        @Operation(summary = "Consultar el estado de un job de análisis de una carrera")
+        @ApiResponses({
+                        @ApiResponse(responseCode = "200", description = "Estado del job"),
+                        @ApiResponse(responseCode = "404", description = "El job no existe o no pertenece al usuario", content = @Content(schema = @Schema(implementation = ErrorResponseDto.class)))
+        })
+        public ResponseEntity<ActivityAnalysisJobResponseDto> getAnalysisJob(
+                        @AuthenticationPrincipal UserPrincipal principal,
+                        @Parameter(description = "ID de la actividad", example = "2026-09-05T07:00:00Z") @PathVariable String id,
+                        @Parameter(description = "requestId del job", example = "8f3c2a1e-...") @PathVariable String requestId) {
+                ActivityAnalysisJobResponseDto job = analysisGenerationService.getJob(
+                                principal.id(), requestId);
+                if (!id.equals(job.activityId())) {
+                        return ResponseEntity.notFound().build();
+                }
+                return ResponseEntity.ok(job);
         }
 }

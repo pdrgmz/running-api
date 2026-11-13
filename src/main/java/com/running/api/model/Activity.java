@@ -104,6 +104,10 @@ public class Activity {
     @Column(columnDefinition = "TEXT")
     private String extraData;
 
+    @Schema(description = "Análisis de la actividad generado por IA (JSON)")
+    @Column(name = "ai_analysis", columnDefinition = "TEXT")
+    private String aiAnalysis;
+
     @Schema(description = "Fecha y hora de creación del registro", example = "2026-09-05T07:05:00")
     private LocalDateTime createdAt;
 

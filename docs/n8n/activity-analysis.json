@@ -1,0 +1,451 @@
+{
+  "name": "Running API - Activity Analysis (Agent + MCP)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Running API · Análisis de actividad con AI Agent + MCP\n\nEl workflow es agnóstico al usuario: la API envía un JWT efímero (`Authorization`) y el agente lo usa para conectarse al MCP con `access_token`.\n\n### Flujo\n1. El **AI Agent** llama a `get_activity_by_id` y a las herramientas de analítica (`get_splits`, `get_hr_zones`, `get_training_load`, `get_vo2max`) para estudiar la actividad.\n2. El LLM genera un análisis con puntos fuertes, áreas de mejora y recomendaciones.\n3. n8n envía el análisis a `save_activity_analysis` con el mismo JWT.\n\n### Variables de entorno de n8n\n- `TELEGRAM_CHAT_ID` (obligatoria)\n- `RUNNING_API_MCP_URL` (solo fallback; la API envía `mcpUrl` en el body)\n\n### Credenciales\nSelecciona tu credencial de **OpenAI** en el nodo `OpenAI Chat Model` y tu credencial de **Telegram** en los dos nodos de Telegram. Puedes cambiar el modelo en el nodo `OpenAI Chat Model` (por defecto `gpt-4.1-mini`).\n\n### Importante\nEl nodo **MCP Client Tool** no admite credenciales dinámicas por ejecución, así que el JWT del job viaja como query param `access_token`, que la API solo acepta en `/mcp`.\n\nEl webhook responde de inmediato y el trabajo continúa en segundo plano. Si algo falla, el workflow llama a `fail_activity_analysis_job` para que la API marque el job como FAILED.",
+        "height": 560,
+        "width": 520
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000001",
+      "name": "Instrucciones",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [80, -120]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "activity-analysis",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000002",
+      "name": "Webhook API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [620, 120],
+      "webhookId": "running-api-activity-analysis"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $json.body ? $json : { body: $json, headers: {} };\nconst body = input.body || {};\nconst headers = input.headers || {};\nconst auth = headers.authorization || headers.Authorization || '';\nconst token = String(auth).replace(/^Bearer\\s+/i, '');\nconst mcpUrl = body.mcpUrl || $env.RUNNING_API_MCP_URL || '';\nif (!token) throw new Error('Falta Authorization: Bearer <jwt> en el webhook');\nif (!body.requestId || !body.activityId) throw new Error('Faltan requestId o activityId en el body');\nif (!mcpUrl) throw new Error('Falta mcpUrl en el body o RUNNING_API_MCP_URL');\nconst separator = mcpUrl.includes('?') ? '&' : '?';\nconst mcpEndpoint = mcpUrl + separator + 'access_token=' + encodeURIComponent(token);\nreturn [{ json: { token, mcpUrl, mcpEndpoint, requestId: body.requestId, activityId: body.activityId, replace: body.replace === true || body.replace === 'true' } }];"
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000003",
+      "name": "Preparar llamadas MCP",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 120]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analiza la actividad {{ $json.activityId }} (requestId {{ $json.requestId }}).\n\n1. Llama obligatoriamente a get_activity_by_id con id={{ $json.activityId }}.\n2. Complementa el análisis con get_splits, get_hr_zones, get_training_load y get_vo2max para la misma actividad.\n3. Interpreta los datos: ritmo, deriva cardíaca, zonas de FC, carga, eficiencia y coherencia con el objetivo.\n4. Devuelve SOLO el objeto JSON del análisis, sin markdown ni explicaciones.",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "Eres un entrenador de running experto. Analizas UNA actividad concreta de la API Running y devuelves un análisis técnico, claro y accionable.\n\nAntes de responder, llama obligatoriamente a get_activity_by_id con el id indicado y, si están disponibles, a get_splits, get_hr_zones, get_training_load y get_vo2max.\n\nReglas:\n- Usa los datos reales de la actividad (distancia, tiempo, ritmo, FC, desnivel, carga, VO2Max, splits y zonas) para justificar el análisis.\n- Sé honesto: señala tanto lo que funcionó como lo que se puede mejorar.\n- No inventes datos que no aparezcan en las herramientas.\n- El JSON debe tener: summary (una frase), strengths (array de 2-4 puntos fuertes), weaknesses (array de 2-4 áreas de mejora), recommendations (array de 2-4 acciones concretas), model y promptVersion.\n- Devuelve SOLO el objeto JSON. No uses bloques de código ni texto adicional.",
+          "maxIterations": 6
+        }
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000004",
+      "name": "AI Agent · análisis",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.9,
+      "position": [1080, 120],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "gpt-4.1-mini"
+        },
+        "responsesApiEnabled": false,
+        "options": {
+          "temperature": 0.3,
+          "timeout": 120000
+        }
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000005",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [880, -60]
+    },
+    {
+      "parameters": {
+        "serverTransport": "httpStreamable",
+        "endpointUrl": "={{ $('Preparar llamadas MCP').item.json.mcpEndpoint }}",
+        "authentication": "none",
+        "include": "selected",
+        "includeTools": [
+          "get_activity_by_id",
+          "get_splits",
+          "get_hr_zones",
+          "get_training_load",
+          "get_vo2max"
+        ],
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000006",
+      "name": "MCP Client Tool",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.4,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const raw = typeof $json.output === 'string' ? $json.output : JSON.stringify($json.output ?? '');\nlet text = raw.trim().replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/, '');\nconst start = text.indexOf('{');\nconst end = text.lastIndexOf('}');\nif (start >= 0 && end > start) text = text.slice(start, end + 1);\nif (!text) throw new Error('El agente no devolvió un análisis JSON');\nconst analysis = JSON.parse(text);\nconst p = $('Preparar llamadas MCP').item.json;\nreturn [{ json: { ...p, analysis, analysisJson: JSON.stringify(analysis) } }];"
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000007",
+      "name": "Extraer análisis JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 120],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.mcpUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 'save-analysis-' + $runIndex, method: 'tools/call', params: { name: 'save_activity_analysis', arguments: { activityId: $json.activityId, analysisJson: $json.analysisJson } } }) }}",
+        "options": {}
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000008",
+      "name": "MCP · guardar análisis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 120],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const raw = $json?.result?.content?.[0]?.text;\nlet result = {};\ntry { result = raw ? JSON.parse(raw) : {}; } catch (e) { result = { ok: false, message: 'Respuesta MCP no es JSON: ' + raw }; }\nconst p = $('Preparar llamadas MCP').item.json;\nreturn [{ json: { ...p, saveResult: result, saved: result.ok === true, analysis: result.analysis || null, failError: result.ok === true ? null : (result.message || JSON.stringify(result)) } }];"
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000009",
+      "name": "Parsear guardado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition-analysis-saved",
+              "leftValue": "={{ $json.saved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2a8f3c2a-2000-4000-8000-00000000000a",
+      "name": "¿Análisis guardado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2000, 120]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const a = $json.analysis;\nif (!a) throw new Error('No hay análisis guardado para el mensaje');\nconst lines = ['🏃 Análisis de la actividad ' + $json.activityId];\nif (a.summary) lines.push('', a.summary);\nif (Array.isArray(a.strengths) && a.strengths.length) lines.push('', '✅ Puntos fuertes:', ...a.strengths.map(s => '• ' + s));\nif (Array.isArray(a.weaknesses) && a.weaknesses.length) lines.push('', '⚠️ Áreas de mejora:', ...a.weaknesses.map(s => '• ' + s));\nif (Array.isArray(a.recommendations) && a.recommendations.length) lines.push('', '💡 Recomendaciones:', ...a.recommendations.map(s => '• ' + s));\nreturn [{ json: { telegramText: lines.join('\\n') } }];"
+      },
+      "id": "2a8f3c2a-2000-4000-8000-00000000000b",
+      "name": "Mensaje análisis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 20]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.telegramText }}",
+        "additionalFields": {}
+      },
+      "id": "2a8f3c2a-2000-4000-8000-00000000000c",
+      "name": "Telegram · análisis",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2440, 20]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $('Preparar llamadas MCP').item.json;\nconst error = $json.failError || $json.saveResult?.message || $json.error?.message || $json.message || 'Error analizando la actividad';\nreturn [{ json: { ...p, failError: String(error) } }];"
+      },
+      "id": "2a8f3c2a-2000-4000-8000-00000000000d",
+      "name": "Preparar fallo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.mcpUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 'fail-analysis-' + $runIndex, method: 'tools/call', params: { name: 'fail_activity_analysis_job', arguments: { requestId: $json.requestId, error: $json.failError } } }) }}",
+        "options": {}
+      },
+      "id": "2a8f3c2a-2000-4000-8000-00000000000e",
+      "name": "MCP · reportar fallo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2440, 260]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $('Preparar fallo').item.json;\nconst text = '⚠️ No se pudo analizar la actividad (' + p.activityId + ').\\n' + p.failError + '\\nrequestId: ' + p.requestId;\nreturn [{ json: { telegramText: text } }];"
+      },
+      "id": "2a8f3c2a-2000-4000-8000-00000000000f",
+      "name": "Mensaje error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 260]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.telegramText }}",
+        "additionalFields": {}
+      },
+      "id": "2a8f3c2a-2000-4000-8000-000000000010",
+      "name": "Telegram · error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2880, 260]
+    }
+  ],
+  "connections": {
+    "Webhook API": {
+      "main": [
+        [
+          {
+            "node": "Preparar llamadas MCP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar llamadas MCP": {
+      "main": [
+        [
+          {
+            "node": "AI Agent · análisis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent · análisis",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP Client Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent · análisis",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent · análisis": {
+      "main": [
+        [
+          {
+            "node": "Extraer análisis JSON",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar fallo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer análisis JSON": {
+      "main": [
+        [
+          {
+            "node": "MCP · guardar análisis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar fallo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP · guardar análisis": {
+      "main": [
+        [
+          {
+            "node": "Parsear guardado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar fallo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear guardado": {
+      "main": [
+        [
+          {
+            "node": "¿Análisis guardado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Análisis guardado?": {
+      "main": [
+        [
+          {
+            "node": "Mensaje análisis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar fallo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensaje análisis": {
+      "main": [
+        [
+          {
+            "node": "Telegram · análisis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar fallo": {
+      "main": [
+        [
+          {
+            "node": "MCP · reportar fallo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP · reportar fallo": {
+      "main": [
+        [
+          {
+            "node": "Mensaje error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensaje error": {
+      "main": [
+        [
+          {
+            "node": "Telegram · error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2a8f3c2a-2000-4000-8000-000000000000",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

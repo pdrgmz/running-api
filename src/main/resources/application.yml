@@ -95,6 +95,16 @@ app:
       retry-backoff-millis: ${APP_TRAINING_DAILY_RETRY_BACKOFF_MILLIS:2000}
       reconcile-cron: ${APP_TRAINING_DAILY_RECONCILE_CRON:0 */10 * * * *}
       webhook-timeout-seconds: ${APP_TRAINING_DAILY_WEBHOOK_TIMEOUT_SECONDS:20}
+    activity-analysis:
+      # Webhook de n8n que recibe {requestId, activityId, replace, mcpUrl} y el JWT efímero.
+      # Sin ella, POST /api/v1/activities/{id}/analyze responde 503.
+      n8n-webhook-url: ${APP_TRAINING_ACTIVITY_ANALYSIS_N8N_WEBHOOK_URL:}
+      # URL del servidor MCP que n8n usará para leer la actividad y guardar el análisis.
+      mcp-url: ${APP_TRAINING_ACTIVITY_ANALYSIS_MCP_URL:http://localhost:8080/mcp}
+      token-ttl-minutes: ${APP_TRAINING_ACTIVITY_ANALYSIS_TOKEN_TTL_MINUTES:45}
+      max-attempts: ${APP_TRAINING_ACTIVITY_ANALYSIS_MAX_ATTEMPTS:3}
+      retry-backoff-millis: ${APP_TRAINING_ACTIVITY_ANALYSIS_RETRY_BACKOFF_MILLIS:2000}
+      webhook-timeout-seconds: ${APP_TRAINING_ACTIVITY_ANALYSIS_WEBHOOK_TIMEOUT_SECONDS:20}
 
 springdoc:
   api-docs:

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.running.api.mcp.tools.ActivityAnalysisTools;
 import com.running.api.mcp.tools.ActivityTools;
 import com.running.api.mcp.tools.AnalyticsTools;
 import com.running.api.mcp.tools.StatsTools;
@@ -46,6 +47,7 @@ public class McpServerController {
     private final StatsTools statsTools;
     private final AnalyticsTools analyticsTools;
     private final TrainingTools trainingTools;
+    private final ActivityAnalysisTools activityAnalysisTools;
 
     private final Map<String, McpTool> tools = new LinkedHashMap<>();
     private final Map<String, SessionInfo> sessions = new ConcurrentHashMap<>();
@@ -138,6 +140,28 @@ public class McpServerController {
                         "requestId", new McpParam("string",
                                 "Solo si el token no lo incluye; normalmente se toma del JWT.", false)),
                 this::failGenerationJob);
+
+        registerTool("save_activity_analysis",
+                "Valida y guarda el análisis de una actividad generado por el LLM en la propia actividad. "
+                        + "El usuario sale del JWT. Devuelve JSON con ok/requestId o, si isError=true, el error. "
+                        + "El parámetro analysisJson es un string con el análisis: puede ser texto libre o un "
+                        + "objeto JSON con las conclusiones, puntos fuertes, áreas de mejora y recomendaciones.",
+                Map.of(
+                        "activityId", new McpParam("string",
+                                "ID de la actividad analizada. Debe coincidir con el job.", true),
+                        "analysisJson", new McpParam("string",
+                                "Análisis como string (texto libre o JSON serializado)", true),
+                        "requestId", new McpParam("string",
+                                "Solo si el token no lo incluye; normalmente se toma del JWT.", false)),
+                this::saveActivityAnalysis);
+
+        registerTool("fail_activity_analysis_job",
+                "Marca el job de análisis de actividad como FAILED cuando n8n no puede completarlo.",
+                Map.of(
+                        "error", new McpParam("string", "Descripción del fallo", true),
+                        "requestId", new McpParam("string",
+                                "Solo si el token no lo incluye; normalmente se toma del JWT.", false)),
+                this::failActivityAnalysisJob);
     }
 
     private void registerTool(String name, String description,
@@ -403,6 +427,14 @@ public class McpServerController {
 
     private McpToolResult failGenerationJob(JsonNode args) {
         return trainingTools.failGenerationJob(args);
+    }
+
+    private McpToolResult saveActivityAnalysis(JsonNode args) {
+        return activityAnalysisTools.saveActivityAnalysis(args);
+    }
+
+    private McpToolResult failActivityAnalysisJob(JsonNode args) {
+        return activityAnalysisTools.failActivityAnalysisJob(args);
     }
 
     private record McpTool(String name, String description,
