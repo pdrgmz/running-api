@@ -4,6 +4,7 @@ import com.running.api.repository.ActivityRepository;
 import com.running.api.repository.projection.ElevationBackfillProjection;
 import com.running.api.util.AltitudeUtils;
 import com.running.api.util.FlatAltitudeDetector;
+import com.running.api.util.TrainingTimeUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
@@ -66,7 +67,8 @@ public class ElevationBackfillService {
         this.sampleDistanceMeters = Math.max(0.0, sampleDistanceMeters);
     }
 
-    @Scheduled(cron = "${app.elevation.backfill.cron:0 */15 * * * *}")
+    @Scheduled(cron = "${app.elevation.backfill.cron:0 */15 * * * *}",
+            zone = TrainingTimeUtils.DEFAULT_TIMEZONE)
     public void backfillMissingAltitudes() {
         if (!enabled || !externalEnabled) {
             return;

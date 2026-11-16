@@ -67,7 +67,8 @@ public class DailyRecommendationScheduler {
         this.jobTimeoutMinutes = Math.max(5, jobTimeoutMinutes);
     }
 
-    @Scheduled(cron = "${app.training.daily.cron:0 0 * * * *}")
+    @Scheduled(cron = "${app.training.daily.cron:0 0 * * * *}",
+            zone = TrainingTimeUtils.DEFAULT_TIMEZONE)
     public void generateDailyRecommendations() {
         if (!enabled) {
             return;
@@ -119,7 +120,8 @@ public class DailyRecommendationScheduler {
         }
     }
 
-    @Scheduled(cron = "${app.training.daily.reconcile-cron:0 */10 * * * *}")
+    @Scheduled(cron = "${app.training.daily.reconcile-cron:0 */10 * * * *}",
+            zone = TrainingTimeUtils.DEFAULT_TIMEZONE)
     public void reconcileStaleJobs() {
         if (!reconciling.compareAndSet(false, true)) {
             return;

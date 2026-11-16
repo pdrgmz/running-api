@@ -1002,8 +1002,8 @@ El cron se ejecuta cada hora y procesa a cada atleta cuando su hora local alcanz
 una hora fija del servidor. Si la API estuvo caída a esa hora, la genera en el siguiente barrido del
 día; solo se encola un job por día y usuario.
 
-La API fija **`America/Caracas`** como zona horaria por defecto al arrancar (para `LocalDateTime.now()`
-y los cron de Spring) y como zona de los atletas que aún no han configurado sus preferencias.
+La API fija **`America/Caracas`** como zona horaria por defecto al arrancar (para `LocalDateTime.now()`,
+los cron de Spring y los logs) y como zona de los atletas que aún no han configurado sus preferencias.
 
 ### Workflow de n8n
 
