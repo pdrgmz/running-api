@@ -987,7 +987,7 @@ curl -X PUT http://localhost:8080/api/v1/training/preferences \
   -H "Content-Type: application/json" \
   -d '{
     "enabled": true,
-    "timezone": "Europe/Madrid",
+    "timezone": "America/Caracas",
     "generationHour": 6,
     "notes": "Prefiero entrenar por la mañana"
   }'
@@ -1001,6 +1001,9 @@ El cron se ejecuta cada hora y procesa a cada atleta cuando su hora local alcanz
 `generationHour`. Así la recomendación se genera por la mañana en la zona horaria del usuario, no a
 una hora fija del servidor. Si la API estuvo caída a esa hora, la genera en el siguiente barrido del
 día; solo se encola un job por día y usuario.
+
+La API fija **`America/Caracas`** como zona horaria por defecto al arrancar (para `LocalDateTime.now()`
+y los cron de Spring) y como zona de los atletas que aún no han configurado sus preferencias.
 
 ### Workflow de n8n
 
@@ -1215,7 +1218,7 @@ automática.
 |-------|------|-------------|
 | `userId` | Long | Propietario (único) |
 | `enabled` | Boolean | Activa el cron diario |
-| `timezone` | String | Zona IANA (`Europe/Madrid` por defecto) |
+| `timezone` | String | Zona IANA (`America/Caracas` por defecto) |
 | `generationHour` | Integer | Hora local (0-23) de generación (`6` por defecto) |
 | `notes` | String | Restricciones para el LLM |
 

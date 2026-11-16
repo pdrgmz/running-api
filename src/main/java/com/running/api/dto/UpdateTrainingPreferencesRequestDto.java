@@ -6,7 +6,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 public record UpdateTrainingPreferencesRequestDto(
         @Schema(description = "Activa la generación automática diaria", example = "true")
         Boolean enabled,
-        @Schema(description = "Zona horaria IANA", example = "Europe/Madrid")
+        @Schema(description = "Zona horaria IANA", example = "America/Caracas")
         String timezone,
         @Schema(description = "Hora local (0-23) a la que se genera la recomendación", example = "6")
         Integer generationHour,

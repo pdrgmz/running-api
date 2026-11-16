@@ -6,7 +6,7 @@ import java.time.ZoneId;
 /** Utilidades de zona horaria para la generación diaria. */
 public final class TrainingTimeUtils {
 
-    public static final String DEFAULT_TIMEZONE = "Europe/Madrid";
+    public static final String DEFAULT_TIMEZONE = "America/Caracas";
     public static final int DEFAULT_GENERATION_HOUR = 6;
 
     private TrainingTimeUtils() {

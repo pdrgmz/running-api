@@ -46,8 +46,8 @@ public class TrainingPreferences {
 
     @Column(nullable = false)
     @Builder.Default
-    @Schema(description = "Zona horaria IANA del atleta", example = "Europe/Madrid")
-    private String timezone = "Europe/Madrid";
+    @Schema(description = "Zona horaria IANA del atleta", example = "America/Caracas")
+    private String timezone = "America/Caracas";
 
     @Column(name = "generation_hour")
     @Builder.Default
