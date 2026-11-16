@@ -1,26 +1,30 @@
 package com.running.api.service;
 
-import com.running.api.dto.AcwrStatusDto;
-import com.running.api.dto.HrZonesResponseDto;
-import com.running.api.dto.SplitDto;
-import com.running.api.model.Activity;
-import com.running.api.model.ActivityTrackpoint;
-import com.running.api.repository.ActivityRepository;
-import com.running.api.repository.projection.DailyTrimpProjection;
-import org.junit.jupiter.api.Test;
-
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+
+import com.running.api.dto.AcwrStatusDto;
+import com.running.api.dto.HrZonesResponseDto;
+import com.running.api.dto.SplitDto;
+import com.running.api.model.Activity;
+import com.running.api.model.ActivityTrackpoint;
+import com.running.api.model.HrZoneMethod;
+import com.running.api.model.RunnerZoneProfile;
+import com.running.api.model.RunnerZoneRange;
+import com.running.api.model.ZoneRangeType;
+import com.running.api.repository.ActivityRepository;
+import com.running.api.repository.RunnerZoneProfileRepository;
+import com.running.api.repository.projection.DailyTrimpProjection;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
 
 class AnalyticsServiceTest {
 
@@ -81,7 +85,7 @@ class AnalyticsServiceTest {
         when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
         when(repository.findMaxHeartRatesByUserId(USER_ID)).thenReturn(List.of(200));
 
-        HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
+        HrZonesResponseDto zones = new AnalyticsService(repository, emptyZoneProfiles()).calculateHrZones(USER_ID, ACTIVITY_ID);
 
         assertThat(zones.getMaxHrUsed()).isEqualTo(200);
         assertThat(zones.getZones().getZ3Tempo().getPercentage()).isEqualTo(100.0);
@@ -103,7 +107,7 @@ class AnalyticsServiceTest {
         when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
         when(repository.findMaxHeartRatesByUserId(USER_ID)).thenReturn(List.of());
 
-        HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
+        HrZonesResponseDto zones = new AnalyticsService(repository, emptyZoneProfiles()).calculateHrZones(USER_ID, ACTIVITY_ID);
 
         assertThat(zones.getMaxHrUsed()).isEqualTo(185);
         // 100 / 185 = 54 % -> Z1
@@ -128,9 +132,36 @@ class AnalyticsServiceTest {
         when(repository.findMaxHeartRatesByUserId(USER_ID))
                 .thenReturn(List.of(176, 178, 179, 180, 181, 182, 183, 184, 185, 186, 190));
 
-        HrZonesResponseDto zones = new AnalyticsService(repository).calculateHrZones(USER_ID, ACTIVITY_ID);
+        HrZonesResponseDto zones = new AnalyticsService(repository, emptyZoneProfiles()).calculateHrZones(USER_ID, ACTIVITY_ID);
 
         assertThat(zones.getMaxHrUsed()).isEqualTo(190);
+    }
+
+    @Test
+    void usesRunnerZoneProfileForActivityDistribution() {
+        // El perfil guardado manda: 150 bpm cae en Z4 porque su límite superior es 160,
+        // aunque la referencia robusta de las sesiones sea 200.
+        Activity activity = Activity.builder()
+                .id(ACTIVITY_ID)
+                .userId(USER_ID)
+                .maxHeartRate(170)
+                .trackpoints(buildConstantHeartRateSeries(120, 150))
+                .build();
+
+        ActivityRepository repository = mock(ActivityRepository.class);
+        when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
+        when(repository.findMaxHeartRatesByUserId(USER_ID)).thenReturn(List.of(200));
+
+        RunnerZoneProfileRepository zoneRepository = mock(RunnerZoneProfileRepository.class);
+        when(zoneRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(profileWithBands(100, 120, 140, 160, 190)));
+
+        HrZonesResponseDto zones = new AnalyticsService(repository, zoneRepository)
+                .calculateHrZones(USER_ID, ACTIVITY_ID);
+
+        assertThat(zones.getMaxHrUsed()).isEqualTo(190);
+        assertThat(zones.getZones().getZ4Threshold().getPercentage()).isEqualTo(100.0);
+        assertThat(zones.getZones().getZ3Tempo().getSeconds()).isZero();
     }
 
     @Test
@@ -138,7 +169,7 @@ class AnalyticsServiceTest {
         ActivityRepository repository = mock(ActivityRepository.class);
         when(repository.findEarliestActivityDate(USER_ID)).thenReturn(Optional.empty());
 
-        AcwrStatusDto acwr = new AnalyticsService(repository).calculateCurrentAcwr(USER_ID);
+        AcwrStatusDto acwr = new AnalyticsService(repository, emptyZoneProfiles()).calculateCurrentAcwr(USER_ID);
 
         assertThat(acwr.zone()).isEqualTo("UNDETERMINED");
         assertThat(acwr.acwr()).isZero();
@@ -153,7 +184,7 @@ class AnalyticsServiceTest {
         when(repository.findDailyTrimpSum(eq(USER_ID), any(), any()))
                 .thenReturn(List.of(recentRun));
 
-        AcwrStatusDto acwr = new AnalyticsService(repository).calculateCurrentAcwr(USER_ID);
+        AcwrStatusDto acwr = new AnalyticsService(repository, emptyZoneProfiles()).calculateCurrentAcwr(USER_ID);
 
         assertThat(acwr.zone()).isEqualTo("UNDETERMINED");
         assertThat(acwr.acwr()).isZero();
@@ -178,7 +209,7 @@ class AnalyticsServiceTest {
         when(repository.findEarliestActivityDate(USER_ID)).thenReturn(Optional.of(earliest));
         when(repository.findDailyTrimpSum(eq(USER_ID), any(), any())).thenReturn(daily);
 
-        AcwrStatusDto acwr = new AnalyticsService(repository).calculateCurrentAcwr(USER_ID);
+        AcwrStatusDto acwr = new AnalyticsService(repository, emptyZoneProfiles()).calculateCurrentAcwr(USER_ID);
 
         // EWMA 7/28 -> ATL 23.30, CTL 80.79, ratio 0.29. Con 7/42 el CTL sería ~94.36.
         assertThat(acwr.acuteLoad()).isCloseTo(23.30, within(0.05));
@@ -204,7 +235,7 @@ class AnalyticsServiceTest {
         when(repository.findMaxHeartRatesByUserId(USER_ID))
                 .thenReturn(List.of(170, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184));
 
-        new AnalyticsService(repository).refreshHeartRateMetrics(activity);
+        new AnalyticsService(repository, emptyZoneProfiles()).refreshHeartRateMetrics(activity);
 
         assertThat(activity.getTrainingLoad()).isCloseTo(3.0, within(0.05));
     }
@@ -225,7 +256,32 @@ class AnalyticsServiceTest {
 
         ActivityRepository repository = mock(ActivityRepository.class);
         when(repository.findByIdAndUserId(ACTIVITY_ID, USER_ID)).thenReturn(Optional.of(activity));
-        return new AnalyticsService(repository);
+        return new AnalyticsService(repository, emptyZoneProfiles());
+    }
+
+    private RunnerZoneProfileRepository emptyZoneProfiles() {
+        RunnerZoneProfileRepository repository = mock(RunnerZoneProfileRepository.class);
+        when(repository.findByUserId(any())).thenReturn(Optional.empty());
+        return repository;
+    }
+
+    private RunnerZoneProfile profileWithBands(int... bands) {
+        List<RunnerZoneRange> ranges = new ArrayList<>();
+        for (int i = 0; i < bands.length; i++) {
+            ranges.add(RunnerZoneRange.builder()
+                    .zoneType(ZoneRangeType.HEART_RATE)
+                    .zoneNumber(i + 1)
+                    .minValue(i == 0 ? 30.0 : bands[i - 1] + 1.0)
+                    .maxValue((double) bands[i])
+                    .build());
+        }
+        return RunnerZoneProfile.builder()
+                .userId(USER_ID)
+                .maxHeartRate(190)
+                .restingHeartRate(60)
+                .heartRateMethod(HrZoneMethod.CUSTOM)
+                .zones(ranges)
+                .build();
     }
 
     private List<ActivityTrackpoint> buildSeries(int intervals, double metersPerInterval, int secondsPerInterval) {

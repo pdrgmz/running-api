@@ -14,15 +14,15 @@ import com.running.api.dto.Vo2MaxVamResponseDto;
 import com.running.api.exception.ResourceNotFoundException;
 import com.running.api.model.Activity;
 import com.running.api.model.ActivityTrackpoint;
+import com.running.api.model.RunnerZoneProfile;
+import com.running.api.model.RunnerZoneRange;
+import com.running.api.model.ZoneRangeType;
 import com.running.api.repository.ActivityRepository;
+import com.running.api.repository.RunnerZoneProfileRepository;
 import com.running.api.repository.projection.DailyTrimpProjection;
 import com.running.api.util.DistanceSeries;
 import com.running.api.util.ElevationAccumulator;
 import com.running.api.util.RunningMetrics;
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -30,7 +30,12 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
@@ -62,6 +67,7 @@ public class AnalyticsService {
     private static final int FALLBACK_MAX_HR = 185;
 
     private final ActivityRepository activityRepository;
+    private final RunnerZoneProfileRepository runnerZoneProfileRepository;
 
     @Value("${app.user.max-hr:185}")
     private Integer defaultMaxHr;
@@ -191,10 +197,26 @@ public class AnalyticsService {
         Activity activity = activityRepository.findByIdAndUserId(activityId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Carrera no encontrada con id: " + activityId));
 
+        Optional<RunnerZoneProfile> zoneProfile = runnerZoneProfileRepository.findByUserId(userId);
+
         // La referencia es la FC máxima del atleta, no el pico de esta sesión: si se usa el
         // máximo de la actividad, todas las muestras se comprimen hacia las zonas altas y un
-        // rodaje suave acaba mostrándose como Z4/Z5.
-        int maxHr = resolveAthleteMaxHr(userId, activity.getMaxHeartRate());
+        // rodaje suave acaba mostrándose como Z4/Z5. Si el atleta ha guardado su perfil,
+        // su FC máxima y sus cortes personalizados mandan sobre la referencia calculada.
+        int maxHr = zoneProfile
+                .map(RunnerZoneProfile::getMaxHeartRate)
+                .filter(hr -> hr != null && hr > 0)
+                .orElseGet(() -> resolveAthleteMaxHr(userId, activity.getMaxHeartRate()));
+
+        List<Integer> zoneUpperBounds = zoneProfile
+                .map(profile -> profile.getZones() == null ? List.<Integer>of() : profile.getZones().stream()
+                        .filter(range -> range.getZoneType() == ZoneRangeType.HEART_RATE)
+                        .sorted(Comparator.comparing(RunnerZoneRange::getZoneNumber))
+                        .map(RunnerZoneRange::getMaxValue)
+                        .filter(Objects::nonNull)
+                        .map(value -> (int) Math.round(value))
+                        .toList())
+                .orElse(List.of());
 
         int z1 = 0, z2 = 0, z3 = 0, z4 = 0, z5 = 0;
 
@@ -202,7 +224,18 @@ public class AnalyticsService {
         if (points != null) {
             for (ActivityTrackpoint pt : points) {
                 if (pt.getHeartRate() == null || pt.getHeartRate() == 0) continue;
-                double pct = (double) pt.getHeartRate() / maxHr;
+                int heartRate = pt.getHeartRate();
+
+                if (zoneUpperBounds.size() == 5) {
+                    if (heartRate <= zoneUpperBounds.get(0)) z1++;
+                    else if (heartRate <= zoneUpperBounds.get(1)) z2++;
+                    else if (heartRate <= zoneUpperBounds.get(2)) z3++;
+                    else if (heartRate <= zoneUpperBounds.get(3)) z4++;
+                    else z5++;
+                    continue;
+                }
+
+                double pct = (double) heartRate / maxHr;
 
                 if (pct < 0.60) z1++;
                 else if (pct < 0.70) z2++;

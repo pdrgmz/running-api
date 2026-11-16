@@ -97,6 +97,14 @@
 - Workflow de n8n listo para importar en
   [`docs/n8n/daily-workout-recommendation.json`](docs/n8n/daily-workout-recommendation.json)
 
+### Zonas del corredor
+- **Perfil de 5 zonas de FC y 5 zonas de ritmo** por usuario, con FC máxima, FC de reposo y ritmo umbral
+- **Cálculo automático desde el historial**: FC máxima robusta de las sesiones y ritmo umbral a partir de
+  las marcas personales (con las actividades recientes como respaldo)
+- **Edición manual completa**: parámetros fisiológicos y los cinco rangos de cada tipo de zona, con
+  validación de orden y solapes
+- Las zonas de FC guardadas se usan al calcular la distribución de `GET /analytics/{id}/hr-zones`
+
 ### Exportación Geoespacial
 - **GeoJSON** — FeatureCollection con la ruta GPS
 - **GPX 1.1** — Exportación estandarizada con descarga de archivo
@@ -120,7 +128,8 @@ src/main/java/com/running/api/
 │   ├── FilesController.java     # Importación/exportación TCX/GPX/FIT
 │   ├── GeoController.java       # Exportación GeoJSON/GPX
 │   ├── StatsController.java     # Estadísticas y récords
-│   └── TrainingController.java  # Recomendaciones diarias, jobs y preferencias
+│   ├── TrainingController.java  # Recomendaciones diarias, jobs y preferencias
+│   └── ZonesController.java     # Zonas de FC y ritmo del corredor
 ├── dto/
 │   ├── AcwrStatusDto.java
 │   ├── ApiKeyCreatedResponseDto.java  # Clave recién creada (valor visible una sola vez)
@@ -139,6 +148,9 @@ src/main/java/com/running/api/
 │   ├── HrZoneDetailDto.java
 │   ├── HrZonesMapDto.java
 │   ├── HrZonesResponseDto.java
+│   ├── HeartRateZoneDto.java / HeartRateZonesProfileDto.java
+│   ├── PaceZoneDto.java / PaceZonesProfileDto.java
+│   ├── RunnerZonesResponseDto.java / UpdateRunnerZonesRequestDto.java
 │   ├── LoginRequestDto.java     # Credenciales de login
 │   ├── PmcPointDto.java
 │   ├── RacePredictionsDto.java
@@ -186,6 +198,9 @@ src/main/java/com/running/api/
 │   ├── ApiKey.java              # Clave de API (hash SHA-256, caducidad y último uso)
 │   ├── GlobalSummaryStats.java  # Estadísticas globales acumuladas (por usuario)
 │   ├── PersonalRecord.java      # Récords personales por distancia (por usuario)
+│   ├── RunnerZoneProfile.java   # Perfil de zonas del corredor (una fila por usuario)
+│   ├── RunnerZoneRange.java     # Rango de cada zona de FC o de ritmo
+│   ├── HrZoneMethod.java / PaceZoneMethod.java / ZoneProfileSource.java / ZoneRangeType.java
 │   ├── DailyRecommendation.java # Recomendación diaria validada (una por día)
 │   ├── DailyGenerationJob.java  # Job de generación (requestId, estado, recomendación)
 │   ├── ActivityAnalysisJob.java # Job de análisis de actividad (requestId, estado, resultado)
@@ -198,6 +213,7 @@ src/main/java/com/running/api/
 │   ├── ApiKeyRepository.java
 │   ├── GlobalSummaryStatsRepository.java
 │   ├── PersonalRecordRepository.java
+│   ├── RunnerZoneProfileRepository.java
 │   ├── DailyRecommendationRepository.java
 │   ├── DailyGenerationJobRepository.java
 │   ├── TrainingPreferencesRepository.java
@@ -223,6 +239,7 @@ src/main/java/com/running/api/
 │   ├── GeoService.java
 │   ├── GpxParserService.java
 │   ├── StatsService.java
+│   ├── RunnerZonesService.java    # Perfil de zonas: cálculo, consulta y edición
 │   ├── DailyRecommendationService.java  # Validación, persistencia e histórico diario
 │   ├── TrainingContextService.java      # Contexto del atleta para el LLM
 │   ├── DailyRecommendationGenerationService.java # Job + JWT efímero + webhook n8n
@@ -241,6 +258,7 @@ src/main/java/com/running/api/
 │   ├── GeoUtils.java             # Distancia Haversine
 │   ├── RunningMetrics.java       # TRIMP / VAM / VO2Max / detección de deporte
 │   ├── TrainingTimeUtils.java    # Zonas horarias y hora local de generación
+│   ├── ZoneProfileCalculator.java # Zonas estándar de FC y ritmo
 │   └── SeriesInterpolation.java  # Relleno lineal de series con huecos
 └── RunningApiApplication.java
 ```
@@ -258,7 +276,7 @@ src/main/java/com/running/api/
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5433/running_api` | URL de conexión a PostgreSQL |
 | `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | `runninging` | Credenciales de PostgreSQL |
 | `APP_STORAGE_LOCATION` | `./storage` | Ruta de respaldo de archivos de actividad |
-| `APP_USER_MAX_HR` | `185` | Frecuencia cardíaca máxima para zonas FC |
+| `APP_USER_MAX_HR` | `185` | Frecuencia cardíaca máxima por defecto para zonas FC; el perfil del corredor puede sobrescribirla |
 | `APP_ELEVATION_MIN_THRESHOLD_METERS` | `0.1` | Umbral de histéresis para filtrar ruido GPS |
 | `APP_ELEVATION_EXTERNAL_ENABLED` | `true` | Consultar un DEM externo cuando toda la altitud sea 0/nula |
 | `APP_ELEVATION_API_URL` | `https://api.open-meteo.com/v1/elevation` | Endpoint del proveedor de elevaciones |
@@ -774,6 +792,84 @@ El workflow listo para importar está en
 | `GET` | `/eddington` | Número de Eddington |
 | `GET` | `/acwr/current` | Estado actual ACWR |
 
+### Zonas del corredor (`/api/v1/zones`)
+
+| Método | Path | Descripción |
+|--------|------|-------------|
+| `GET` | `/` | Obtener el perfil; si no está guardado, devuelve uno por defecto calculado al vuelo |
+| `POST` | `/calculate` | Recalcular desde el historial y guardar (`source=CALCULATED`) |
+| `PUT` | `/` | Actualizar manualmente parámetros y rangos (`source=MANUAL`) |
+
+`GET` devuelve `configured=false` cuando todavía no hay un perfil guardado. Las zonas de FC se
+calculan con la FC máxima robusta de las sesiones y las de ritmo con las marcas personales
+(10k, 5k, 15k, 21k, 1k y 42k, en ese orden de prioridad). Si no hay marcas, el cálculo usa la
+actividad elegible más rápida (≥ 5 km y ≥ 20 min).
+
+```bash
+# Obtener el perfil (guardado o por defecto)
+curl http://localhost:8080/api/v1/zones \
+  -H "Authorization: Bearer <token>"
+
+# Calcular y guardar las zonas desde el historial
+curl -X POST http://localhost:8080/api/v1/zones/calculate \
+  -H "Authorization: Bearer <token>"
+
+# Editar solo la FC: FC máxima, FC de reposo y método
+curl -X PUT http://localhost:8080/api/v1/zones \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "heartRate": {
+      "maxHeartRate": 190,
+      "restingHeartRate": 52,
+      "method": "HEART_RATE_RESERVE"
+    }
+  }'
+
+# Fijar manualmente los cinco rangos de FC y de ritmo
+curl -X PUT http://localhost:8080/api/v1/zones \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "heartRate": {
+      "maxHeartRate": 190,
+      "restingHeartRate": 52,
+      "method": "CUSTOM",
+      "zones": [
+        {"zone":1,"minBpm":95,"maxBpm":114},
+        {"zone":2,"minBpm":114,"maxBpm":133},
+        {"zone":3,"minBpm":133,"maxBpm":152},
+        {"zone":4,"minBpm":152,"maxBpm":171},
+        {"zone":5,"minBpm":171,"maxBpm":190}
+      ]
+    },
+    "pace": {
+      "thresholdPaceSecondsPerKm": 270,
+      "method": "CUSTOM",
+      "zones": [
+        {"zone":1,"fastestPaceSecondsPerKm":351,"slowestPaceSecondsPerKm":405},
+        {"zone":2,"fastestPaceSecondsPerKm":310.5,"slowestPaceSecondsPerKm":351},
+        {"zone":3,"fastestPaceSecondsPerKm":283.5,"slowestPaceSecondsPerKm":310.5},
+        {"zone":4,"fastestPaceSecondsPerKm":256.5,"slowestPaceSecondsPerKm":283.5},
+        {"zone":5,"fastestPaceSecondsPerKm":229.5,"slowestPaceSecondsPerKm":256.5}
+      ]
+    }
+  }'
+```
+
+Reglas de edición:
+
+- Se puede enviar solo `heartRate`, solo `pace` o ambos; lo omitido conserva su valor.
+- Si una sección incluye `zones`, debe traer exactamente 5 zonas, `method` debe ser `CUSTOM`,
+  los números 1–5 no se pueden repetir, cada rango debe tener mínimo < máximo y los rangos no
+  pueden solaparse.
+- Si una sección no incluye `zones`, los rangos se recalculan con el método indicado
+  (`MAX_HR_PERCENT`, `HEART_RATE_RESERVE` o `THRESHOLD_PACE_PERCENT`).
+- `heartRate` admite FC máxima de 100–240 bpm y FC de reposo de 30–100 bpm, siempre al menos
+  10 bpm por debajo de la máxima. El ritmo umbral debe estar entre 2:00 y 20:00 min/km.
+- `POST /calculate` sobrescribe el perfil anterior. Si no hay marcas ni actividad elegible,
+  `pace` queda en `null` hasta que se defina un ritmo umbral manualmente.
+
 ### Geoespacial (`/api/v1/geo`)
 
 | Método | Path | Descripción |
@@ -1051,6 +1147,30 @@ Marcas personales por distancia. Único por usuario y categoría (`user_id`, `di
 | `avgSpeed` | Double | Velocidad media |
 | `avgPaceMinPerKm` | Double | Ritmo medio |
 
+### RunnerZoneProfile
+Perfil de zonas del corredor. Una fila por usuario (`user_id` único). Puede estar calculado desde
+el historial o editado manualmente.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `userId` | Long | Propietario (único) |
+| `maxHeartRate` / `restingHeartRate` | Integer | FC máxima y FC de reposo (bpm) |
+| `heartRateMethod` | HrZoneMethod | `MAX_HR_PERCENT`, `HEART_RATE_RESERVE` o `CUSTOM` |
+| `thresholdPaceSecondsPerKm` | Double | Ritmo umbral (segundos por km); `null` si no hay referencia |
+| `paceMethod` | PaceZoneMethod | `THRESHOLD_PACE_PERCENT` o `CUSTOM` |
+| `source` | ZoneProfileSource | `DEFAULT`, `CALCULATED` o `MANUAL` |
+| `calculatedAt` / `updatedAt` | LocalDateTime | Último cálculo y última edición |
+
+### RunnerZoneRange
+Rangos de las cinco zonas de FC y de las cinco zonas de ritmo del perfil.
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `profileId` | Long | Perfil al que pertenece el rango |
+| `zoneType` | ZoneRangeType | `HEART_RATE` (valores en bpm) o `PACE` (segundos/km) |
+| `zoneNumber` | Integer | Número de zona (1-5) |
+| `minValue` / `maxValue` | Double | Límites del rango; en ritmo, menor es más rápido |
+
 ### GlobalSummaryStats
 Estadísticas globales acumuladas. Una fila por usuario (`user_id` único).
 
@@ -1143,7 +1263,8 @@ mvn test
 ```
 
 Cubren, entre otros: cálculo Haversine, acumulación de desnivel con histéresis, métricas
-fisiológicas (TRIMP, VAM, VO2Max), detección de deporte y parseo de XML sintético GPX/TCX.
+fisiológicas (TRIMP, VAM, VO2Max), detección de deporte, parseo de XML sintético GPX/TCX y
+cálculo/validación de las zonas de FC y ritmo del corredor.
 
 ### Calidad de código (opcional)
 
